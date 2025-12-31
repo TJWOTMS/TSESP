@@ -77,7 +77,7 @@ local DefaultConfig = {
 				Color3.fromRGB(255, 0, 170),
 			},
 			Speed = 0.75, -- cycles per second
-			Slices = 8,
+			Slices = 36,
 		},
 	},
 	
@@ -315,9 +315,28 @@ function ESPInstance.new(player, config)
 	self.Config = config or DefaultConfig
 	self.Drawings = {}
 	self.Highlight = nil
+	self._charConn = nil
+	self._connections = {}
 	self.Updating = false
 	
 	self:CreateDrawings()
+
+	-- attach character added to recreate highlight reliably
+	if self.Player and self.Player.Character then
+		-- nothing; UpdateHighlight will create if needed
+	end
+	if self.Player then
+		local ok, conn = pcall(function()
+			return self.Player.CharacterAdded:Connect(function(char)
+				-- small delay to allow character to initialize
+				wait(0.1)
+				self:UpdateHighlight()
+			end)
+		end)
+		if ok and conn then
+			self._charConn = conn
+		end
+	end
 	
 	return self
 end
@@ -352,33 +371,60 @@ function ESPInstance:CreateDrawings()
 end
 
 function ESPInstance:CreateHighlight()
-	if self.Player.Character then
-		self.Highlight = Instance.new("Highlight")
-		self.Highlight.Adornee = self.Player.Character
-		self.Highlight.FillColor = self.Config.Chams.FillColor
-		self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-		self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-		self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-		self.Highlight.Parent = Workspace
+	if not self.Player then return end
+	if not self.Player.Character then return end
+
+	-- create/replace highlight safely
+	if self.Highlight then
+		pcall(function() self.Highlight:Destroy() end)
+		self.Highlight = nil
+	end
+
+	local ok, highlight = pcall(function()
+		local h = Instance.new("Highlight")
+		h.Name = "TSESP_Highlight_Player"
+		h.Adornee = self.Player.Character
+		h.FillColor = self.Config.Chams.FillColor
+		h.FillTransparency = self.Config.Chams.FillTransparency
+		h.OutlineColor = self.Config.Chams.OutlineColor
+		h.OutlineTransparency = self.Config.Chams.OutlineTransparency
+		-- prefer CoreGui when available; fallback to Workspace
+		local parentOk = pcall(function() h.Parent = game:GetService("CoreGui") end)
+		if not parentOk then
+			h.Parent = Workspace
+		end
+		return h
+	end)
+
+	if ok and highlight then
+		self.Highlight = highlight
+		-- try set DepthMode for improved consistency
+		pcall(function() highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
+	else
+		self.Highlight = nil
 	end
 end
 
 function ESPInstance:UpdateHighlight()
 	if self.Config.Chams.Enabled then
-		if not self.Highlight and self.Player.Character then
+		if (not self.Highlight) and self.Player and self.Player.Character then
 			self:CreateHighlight()
-		elseif self.Highlight then
-			self.Highlight.FillColor = self.Config.Chams.FillColor
-			self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-			self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-			self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-			
-			if self.Highlight.Adornee ~= self.Player.Character then
-				self.Highlight.Adornee = self.Player.Character
-			end
+		end
+		if self.Highlight then
+			pcall(function()
+				self.Highlight.FillColor = self.Config.Chams.FillColor
+				self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
+				self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
+				self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
+				if self.Highlight.Adornee ~= self.Player.Character then
+					self.Highlight.Adornee = self.Player.Character
+				end
+				-- ensure DepthMode
+				pcall(function() self.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
+			end)
 		end
 	elseif self.Highlight then
-		self.Highlight:Destroy()
+		pcall(function() self.Highlight:Destroy() end)
 		self.Highlight = nil
 	end
 end
@@ -429,13 +475,19 @@ function ESPInstance:Update()
 		local distance = Utilities:GetDistance(rootPart.Position)
 		if distance > config.MaxDistance then
 			self:SetVisible(false)
+			-- ensure chams are updated/removed even when drawings hidden due to distance
+			self:UpdateHighlight()
 			self.Updating = false
 			return
 		end
+		-- ensure chams are created/kept even if bounding box ends up off-screen
+		self:UpdateHighlight()
 		
 		local boundingBox = Utilities:GetBoundingBox(character)
 		if not boundingBox then
 			self:SetVisible(false)
+			-- keep chams updated when player is off-screen
+			self:UpdateHighlight()
 			self.Updating = false
 			return
 		end
@@ -673,15 +725,16 @@ function ESPInstance:UpdateHealthBar(boundingBox, humanoid)
 			if not slice then break end
 			if config.Position == "Left" or config.Position == "Right" then
 				local sliceHeight = barHeight / slices
+				local overlap = math.min(1, sliceHeight * 0.25)
 				local topY = barPos.Y + (i - 1) * sliceHeight
 				local available = math.clamp(filledHeight - (barHeight - i * sliceHeight), 0, sliceHeight)
 				if available <= 0 then
 					slice.Visible = false
 				else
 					slice.Visible = true
-					local posY = topY + (sliceHeight - available)
+					local posY = topY + (sliceHeight - available) - overlap * 0.5
 					slice.Position = Vector2.new(barPos.X, posY)
-					slice.Size = Vector2.new(barWidth, available)
+					slice.Size = Vector2.new(barWidth, math.clamp(available + overlap, 1, sliceHeight + overlap))
 					local progress = (i - 1) / math.max(1, slices - 1)
 					local offset = (tick() * speed) % 1
 					local samplePos = (progress + offset) % 1
@@ -693,14 +746,15 @@ function ESPInstance:UpdateHealthBar(boundingBox, humanoid)
 			else
 				-- horizontal (Top/Bottom)
 				local sliceWidth = barWidth / slices
+				local overlap = math.min(1, sliceWidth * 0.25)
 				local leftX = barPos.X + (i - 1) * sliceWidth
 				local available = math.clamp(barWidth * healthPercent - (i - 1) * sliceWidth, 0, sliceWidth)
 				if available <= 0 then
 					slice.Visible = false
 				else
 					slice.Visible = true
-					slice.Position = Vector2.new(leftX, barPos.Y)
-					slice.Size = Vector2.new(available, barHeight)
+					slice.Position = Vector2.new(leftX - overlap * 0.5, barPos.Y)
+					slice.Size = Vector2.new(math.clamp(available + overlap, 1, sliceWidth + overlap), barHeight)
 					local progress = (i - 1) / math.max(1, slices - 1)
 					local offset = (tick() * speed) % 1
 					local samplePos = (progress + offset) % 1
@@ -743,10 +797,17 @@ function ESPInstance:SetVisible(visible)
 			drawing.Visible = visible
 		end
 	end
-	
-	if self.Highlight then
-		self.Highlight.Enabled = visible
+	-- Also toggle any gradient health bar slices (they live outside `self.Drawings`)
+	if self.HealthBarSlices then
+		for _, slice in pairs(self.HealthBarSlices) do
+			if slice then
+				slice.Visible = visible
+			end
+		end
 	end
+
+	-- Highlights are managed separately by UpdateHighlight to allow chams
+	-- to remain visible when player is off-screen; do not toggle here.
 end
 
 function ESPInstance:Remove()
@@ -762,9 +823,15 @@ function ESPInstance:Remove()
 	end
 	
 	if self.Highlight then
-		self.Highlight:Destroy()
+		pcall(function() self.Highlight:Destroy() end)
+		self.Highlight = nil
 	end
-	
+
+	if self._charConn then
+		pcall(function() self._charConn:Disconnect() end)
+		self._charConn = nil
+	end
+
 	self.Drawings = {}
 	self.Highlight = nil
 end
@@ -785,6 +852,19 @@ function PartESPInstance.new(part, label, config)
 
 	self:CreateDrawings()
 
+	-- monitor part ancestry to recreate highlight if the part is reparented or respawned
+	if self.Part then
+		local ok, conn = pcall(function()
+			return self.Part.AncestryChanged:Connect(function(child, parent)
+				wait(0.05)
+				self:UpdateHighlight()
+			end)
+		end)
+		if ok and conn then
+			self._partConn = conn
+		end
+	end
+
 	return self
 end
 
@@ -801,32 +881,54 @@ function PartESPInstance:CreateDrawings()
 end
 
 function PartESPInstance:CreateHighlight()
-	if self.Part then
-		self.Highlight = Instance.new("Highlight")
-		self.Highlight.Adornee = self.Part
-		self.Highlight.FillColor = self.Config.Chams.FillColor
-		self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-		self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-		self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-		self.Highlight.Parent = Workspace
+	if not self.Part then return end
+
+	if self.Highlight then
+		pcall(function() self.Highlight:Destroy() end)
+		self.Highlight = nil
 	end
+
+	local ok, highlight = pcall(function()
+		local h = Instance.new("Highlight")
+		h.Name = "TSESP_Highlight_Part"
+		h.Adornee = self.Part
+		h.FillColor = self.Config.Chams.FillColor
+		h.FillTransparency = self.Config.Chams.FillTransparency
+		h.OutlineColor = self.Config.Chams.OutlineColor
+		h.OutlineTransparency = self.Config.Chams.OutlineTransparency
+		local parentOk = pcall(function() h.Parent = game:GetService("CoreGui") end)
+		if not parentOk then h.Parent = Workspace end
+		return h
+	end)
+
+	if ok and highlight then
+		self.Highlight = highlight
+		pcall(function() highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
+	else
+		self.Highlight = nil
+	end
+end
 end
 
 function PartESPInstance:UpdateHighlight()
 	if self.Config.Chams.Enabled then
-		if not self.Highlight and self.Part then
+		if (not self.Highlight) and self.Part then
 			self:CreateHighlight()
-		elseif self.Highlight then
-			self.Highlight.FillColor = self.Config.Chams.FillColor
-			self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-			self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-			self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-			if self.Highlight.Adornee ~= self.Part then
-				self.Highlight.Adornee = self.Part
-			end
+		end
+		if self.Highlight then
+			pcall(function()
+				self.Highlight.FillColor = self.Config.Chams.FillColor
+				self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
+				self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
+				self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
+				if self.Highlight.Adornee ~= self.Part then
+					self.Highlight.Adornee = self.Part
+				end
+				pcall(function() self.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
+			end)
 		end
 	elseif self.Highlight then
-		self.Highlight:Destroy()
+		pcall(function() self.Highlight:Destroy() end)
 		self.Highlight = nil
 	end
 end
@@ -855,13 +957,18 @@ function PartESPInstance:Update()
 		local distance = Utilities:GetDistance(position)
 		if distance > config.MaxDistance then
 			self:SetVisible(false)
+			self:UpdateHighlight()
 			self.Updating = false
 			return
 		end
 
+		-- ensure part chams are maintained even if bounding box ends up off-screen
+		self:UpdateHighlight()
+
 		local boundingBox = Utilities:GetPartBoundingBox(part)
 		if not boundingBox then
 			self:SetVisible(false)
+			self:UpdateHighlight()
 			self.Updating = false
 			return
 		end
@@ -1028,7 +1135,13 @@ function PartESPInstance:Remove()
 	end
 
 	if self.Highlight then
-		self.Highlight:Destroy()
+		pcall(function() self.Highlight:Destroy() end)
+		self.Highlight = nil
+	end
+
+	if self._partConn then
+		pcall(function() self._partConn:Disconnect() end)
+		self._partConn = nil
 	end
 
 	self.Drawings = {}
