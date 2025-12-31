@@ -29,6 +29,8 @@ local activeESPs = {}
 local isVisible = true
 local renderConnection = nil
 
+ESP.activeESPs = activeESPs  -- Expose for external access
+
 -- Check if Drawing is available
 if not Drawing then
     warn("Drawing API not available. ESP will not work.")
@@ -67,13 +69,11 @@ local function getBoundingBox(model: Model)
         }
 
         for _, corner in ipairs(corners) do
-            local pos, onScreen = camera:WorldToViewportPoint(corner.Position)
-            if onScreen then
-                minX = math.min(minX, pos.X)
-                minY = math.min(minY, pos.Y)
-                maxX = math.max(maxX, pos.X)
-                maxY = math.max(maxY, pos.Y)
-            end
+            local pos = camera:WorldToViewportPoint(corner.Position)
+            minX = math.min(minX, pos.X)
+            minY = math.min(minY, pos.Y)
+            maxX = math.max(maxX, pos.X)
+            maxY = math.max(maxY, pos.Y)
         end
     end
 
@@ -105,14 +105,12 @@ function ESP:Add(target: Instance, options: table?)
     local color = options.Color or Color3.new(1, 1, 1)
     local showBox = options.ShowBox
     local boxType = options.BoxType or "Full"
-    local show3DBox = options.Show3DBox
     local showText = options.ShowText
     local showName = options.ShowName
     local showHealth = options.ShowHealth
     local showDistance = options.ShowDistance
     local showTracer = options.ShowTracer
     local tracerFrom = options.TracerFrom or "Bottom"
-    local showOffscreenArrow = options.ShowOffscreenArrow
     local showChams = options.ShowChams
     local chamsColor = options.ChamsColor or color
     local maxDistance = options.MaxDistance
@@ -143,7 +141,7 @@ function ESP:Add(target: Instance, options: table?)
             for i = 1, 8 do
                 local line = Drawing.new("Line")
                 line.Color = color
-                line.Thickness = 1
+                line.Thickness = 2  -- Thicker outline
                 line.Visible = isVisible
                 table.insert(lines, line)
             end
@@ -151,24 +149,12 @@ function ESP:Add(target: Instance, options: table?)
         elseif boxType == "Radius" then
             local circle = Drawing.new("Circle")
             circle.Color = color
-            circle.Thickness = 1
+            circle.Thickness = 3  -- Thicker outline
             circle.Filled = false
             circle.NumSides = 32
             circle.Visible = isVisible
             espData.Drawings.Circle = circle
         end
-    end
-
-    if show3DBox then
-        local lines = {}
-        for i = 1, 12 do
-            local line = Drawing.new("Line")
-            line.Color = color
-            line.Thickness = 1
-            line.Visible = isVisible
-            table.insert(lines, line)
-        end
-        espData.Drawings.Box3DLines = lines
     end
 
     if showTracer then
@@ -177,14 +163,6 @@ function ESP:Add(target: Instance, options: table?)
         tracer.Thickness = 1
         tracer.Visible = isVisible
         espData.Drawings.Tracer = tracer
-    end
-
-    if showOffscreenArrow then
-        local arrow = Drawing.new("Triangle")
-        arrow.Color = color
-        arrow.Filled = true
-        arrow.Visible = false
-        espData.Drawings.Arrow = arrow
     end
 
     if showChams then
@@ -199,18 +177,43 @@ function ESP:Add(target: Instance, options: table?)
     end
 
     if showText or showName or showHealth or showDistance then
-        local txt = Drawing.new("Text")
-        txt.Color = color
-        txt.Size = 14
-        txt.Center = true
-        txt.Outline = true
-        txt.Visible = isVisible
-        espData.Drawings.Text = txt
+        local texts = {}
+        if showName then
+            local nameTxt = Drawing.new("Text")
+            nameTxt.Color = color
+            nameTxt.Size = 14
+            nameTxt.Center = true
+            nameTxt.Outline = true
+            nameTxt.Font = 2
+            nameTxt.Visible = isVisible
+            texts.name = nameTxt
+        end
+        if showHealth then
+            local healthTxt = Drawing.new("Text")
+            healthTxt.Color = color
+            healthTxt.Size = 14
+            healthTxt.Center = false  -- Left align for next to healthbar
+            healthTxt.Outline = true
+            healthTxt.Font = 2
+            healthTxt.Visible = isVisible
+            texts.health = healthTxt
+        end
+        if showDistance then
+            local bottomTxt = Drawing.new("Text")
+            bottomTxt.Color = color
+            bottomTxt.Size = 14
+            bottomTxt.Center = true
+            bottomTxt.Outline = true
+            bottomTxt.Font = 2
+            bottomTxt.Visible = isVisible
+            texts.bottom = bottomTxt
+        end
+        espData.Drawings.Texts = texts
     end
 
     if showHealthbar then
         local segments = {}
-        local numSegments = 200  -- Ultra-smooth gradient
+        local numSegments = 500  -- Ultra-smooth gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -309,16 +312,32 @@ function ESP:UpdateESP(data)
     -- Update offscreen arrow
     if data.Drawings.Arrow then
         if not onScreen then
-            -- calculate edge pos
+            -- calculate accurate edge pos
             local viewportSize = camera.ViewportSize
             local center = viewportSize / 2
             local dir = (screenPos - center).Unit
-            local edgeDist = math.min(viewportSize.X, viewportSize.Y) / 2
-            local edgePos = center + dir * edgeDist
-            -- set triangle points for arrow
+            -- Find intersection with viewport edges
+            local tMin = math.huge
+            if dir.X > 0 then
+                local t = (viewportSize.X - center.X) / dir.X
+                if t > 0 then tMin = math.min(tMin, t) end
+            elseif dir.X < 0 then
+                local t = (0 - center.X) / dir.X
+                if t > 0 then tMin = math.min(tMin, t) end
+            end
+            if dir.Y > 0 then
+                local t = (viewportSize.Y - center.Y) / dir.Y
+                if t > 0 then tMin = math.min(tMin, t) end
+            elseif dir.Y < 0 then
+                local t = (0 - center.Y) / dir.Y
+                if t > 0 then tMin = math.min(tMin, t) end
+            end
+            local margin = 20  -- pixels inside the edge
+            local edgePos = center + dir * math.max(0, tMin - margin)
+            -- set triangle points for arrow pointing towards target
             local angle = math.atan2(dir.Y, dir.X)
-            local size = 20
-            local p1 = edgePos + Vector2.new(math.cos(angle), math.sin(angle)) * size
+            local size = 25
+            local p1 = edgePos - dir * size  -- tip towards center
             local p2 = edgePos + Vector2.new(math.cos(angle + math.pi/2), math.sin(angle + math.pi/2)) * size / 2
             local p3 = edgePos + Vector2.new(math.cos(angle - math.pi/2), math.sin(angle - math.pi/2)) * size / 2
             data.Drawings.Arrow.PointA = p1
@@ -335,9 +354,8 @@ function ESP:UpdateESP(data)
         if data.Drawings.Box then data.Drawings.Box.Visible = false end
         if data.Drawings.CornerLines then for _, l in pairs(data.Drawings.CornerLines) do l.Visible = false end end
         if data.Drawings.Circle then data.Drawings.Circle.Visible = false end
-        if data.Drawings.Box3DLines then for _, l in pairs(data.Drawings.Box3DLines) do l.Visible = false end end
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
-        if data.Drawings.Text then data.Drawings.Text.Visible = false end
+        if data.Drawings.Texts then for _, txt in pairs(data.Drawings.Texts) do txt.Visible = false end end
         if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
         if data.Drawings.HealthFillSegments then for _, d in pairs(data.Drawings.HealthFillSegments) do d.Visible = false end end
         return
@@ -347,7 +365,7 @@ function ESP:UpdateESP(data)
     if data.Drawings.Box then
         data.Drawings.Box.Position = bbox.Position - bbox.Size / 2
         data.Drawings.Box.Size = bbox.Size
-        data.Drawings.Box.Thickness = 3 
+        data.Drawings.Box.Thickness = 4  -- Thicker outline
         data.Drawings.Box.Visible = isVisible
     end
 
@@ -385,57 +403,6 @@ function ESP:UpdateESP(data)
         data.Drawings.Circle.Visible = isVisible
     end
 
-    -- Update 3D box
-    if data.Drawings.Box3DLines then
-        -- get corners
-        local cf = model:GetPivot()
-        local size = model:GetExtentsSize()
-        local corners = {}
-        for i, offset in ipairs({
-            CFrame.new(-size.X/2, -size.Y/2, -size.Z/2),
-            CFrame.new(size.X/2, -size.Y/2, -size.Z/2),
-            CFrame.new(-size.X/2, size.Y/2, -size.Z/2),
-            CFrame.new(size.X/2, size.Y/2, -size.Z/2),
-            CFrame.new(-size.X/2, -size.Y/2, size.Z/2),
-            CFrame.new(size.X/2, -size.Y/2, size.Z/2),
-            CFrame.new(-size.X/2, size.Y/2, size.Z/2),
-            CFrame.new(size.X/2, size.Y/2, size.Z/2),
-        }) do
-            local worldPos = (cf * offset).Position
-            local screenPos3 = camera:WorldToViewportPoint(worldPos)
-            corners[i] = Vector2.new(screenPos3.X, screenPos3.Y)
-        end
-        local lines = data.Drawings.Box3DLines
-        -- front face
-        lines[1].From = corners[1]
-        lines[1].To = corners[2]
-        lines[2].From = corners[2]
-        lines[2].To = corners[4]
-        lines[3].From = corners[4]
-        lines[3].To = corners[3]
-        lines[4].From = corners[3]
-        lines[4].To = corners[1]
-        -- back face
-        lines[5].From = corners[5]
-        lines[5].To = corners[6]
-        lines[6].From = corners[6]
-        lines[6].To = corners[8]
-        lines[7].From = corners[8]
-        lines[7].To = corners[7]
-        lines[8].From = corners[7]
-        lines[8].To = corners[5]
-        -- sides
-        lines[9].From = corners[1]
-        lines[9].To = corners[5]
-        lines[10].From = corners[2]
-        lines[10].To = corners[6]
-        lines[11].From = corners[3]
-        lines[11].To = corners[7]
-        lines[12].From = corners[4]
-        lines[12].To = corners[8]
-        for _, l in pairs(lines) do l.Visible = isVisible end
-    end
-
     -- Update tracer
     if data.Drawings.Tracer then
         local fromPos
@@ -454,25 +421,35 @@ function ESP:UpdateESP(data)
         data.Drawings.Tracer.Visible = isVisible
     end
 
-    -- Update text
-    if data.Drawings.Text then
-        local textStr = ""
-        if options.ShowName then
-            textStr = textStr .. (options.Text or target.Name)
+    -- Update texts
+    if data.Drawings.Texts then
+        local humanoid = model:FindFirstChildOfClass("Humanoid")
+        local player = game.Players:GetPlayerFromCharacter(model)
+        local backpackCount = 0
+        if player and player:FindFirstChild("Backpack") then
+            backpackCount = #player.Backpack:GetChildren()
         end
-        if options.ShowHealth then
-            local humanoid = model:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                textStr = textStr .. " [" .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth) .. "]"
-            end
+
+        if data.Drawings.Texts.name then
+            data.Drawings.Texts.name.Text = options.Text or target.Name
+            data.Drawings.Texts.name.Position = bbox.Position + Vector2.new(0, -bbox.Size.Y / 2 - 20)
+            data.Drawings.Texts.name.Visible = isVisible
         end
-        if options.ShowDistance then
-            textStr = textStr .. " [" .. math.floor(dist) .. "m]"
+
+        if data.Drawings.Texts.health and humanoid then
+            data.Drawings.Texts.health.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
+            local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(0, 0)  -- Adjust to next to healthbar
+            data.Drawings.Texts.health.Position = barPos + Vector2.new(-50, bbox.Size.Y / 2)  -- Left of healthbar
+            data.Drawings.Texts.health.Visible = isVisible
+        elseif data.Drawings.Texts.health then
+            data.Drawings.Texts.health.Visible = false
         end
-        data.Drawings.Text.Text = textStr
-        data.Drawings.Text.Position = bbox.Position + Vector2.new(0, bbox.Size.Y / 2 + 10)
-        data.Drawings.Text.Outline = true  -- Ensure outline
-        data.Drawings.Text.Visible = isVisible
+
+        if data.Drawings.Texts.bottom then
+            data.Drawings.Texts.bottom.Text = backpackCount .. ", " .. math.floor(dist) .. "m"
+            data.Drawings.Texts.bottom.Position = bbox.Position + Vector2.new(0, bbox.Size.Y / 2 + 30)
+            data.Drawings.Texts.bottom.Visible = isVisible
+        end
     end
 
     -- Update healthbar
@@ -488,8 +465,8 @@ function ESP:UpdateESP(data)
                 barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
             end
             if data.Drawings.HealthbarOutline then
-                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(1, 1)
-                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2, barHeight + 2)  -- Match bar height
+                data.Drawings.HealthbarOutline.Position = barPos
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth, barHeight)
                 data.Drawings.HealthbarOutline.Visible = isVisible
             end
             if data.Drawings.HealthFillSegments then
@@ -500,7 +477,7 @@ function ESP:UpdateESP(data)
                     local fill = segments[i]
                     local yOffset = (i-1) * heightPerSegment
                     fill.Position = barPos + Vector2.new(0, yOffset)
-                    fill.Size = Vector2.new(barWidth, heightPerSegment + 2)  -- Larger overlap to remove gaps
+                    fill.Size = Vector2.new(barWidth, heightPerSegment + 0.5)  -- Smaller overlap for 500 segments
                     if (i / numSegments) <= 1 then  -- Always show segments up to bar height
                         if options.HealthbarGradient then
                             local t = tick() * options.GradientSpeed
@@ -560,10 +537,12 @@ function ESP:Remove(target: Instance)
     end
 end
 
--- Clear all ESPs
-function ESP:Clear()
-    for target in pairs(activeESPs) do
-        ESP:Remove(target)
+-- Update options for an existing ESP
+function ESP:UpdateOptions(target: Instance, newOptions: table)
+    local data = activeESPs[target]
+    if not data then return end
+    for k, v in pairs(newOptions) do
+        data.Options[k] = v
     end
 end
 
