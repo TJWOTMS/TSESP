@@ -28,6 +28,9 @@ local ESP = {}
 local activeESPs = {}
 local isVisible = true
 local renderConnection = nil
+local autoAddOptions = nil
+local playerAddedConnection = nil
+local playerRemovingConnection = nil
 
 ESP.activeESPs = activeESPs  -- Expose for external access
 
@@ -119,6 +122,7 @@ function ESP:Add(target: Instance, options: table?)
     local shrinkHealthbar = options.ShrinkHealthbar or false
     local gradientColors = options.GradientColors or {Color3.new(1,0,0), Color3.new(0,1,0)}
     local gradientSpeed = options.GradientSpeed or 1
+    local font = options.Font or "Gotham"
 
     local espData = {
         Target = target,
@@ -184,7 +188,7 @@ function ESP:Add(target: Instance, options: table?)
             nameTxt.Size = 14
             nameTxt.Center = true
             nameTxt.Outline = true
-            nameTxt.Font = 2
+            nameTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
             nameTxt.Visible = isVisible
             texts.name = nameTxt
         end
@@ -194,7 +198,7 @@ function ESP:Add(target: Instance, options: table?)
             healthTxt.Size = 14
             healthTxt.Center = false  -- Left align for next to healthbar
             healthTxt.Outline = true
-            healthTxt.Font = 2
+            healthTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
             healthTxt.Visible = isVisible
             texts.health = healthTxt
         end
@@ -204,7 +208,7 @@ function ESP:Add(target: Instance, options: table?)
             bottomTxt.Size = 14
             bottomTxt.Center = true
             bottomTxt.Outline = true
-            bottomTxt.Font = 2
+            bottomTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
             bottomTxt.Visible = isVisible
             texts.bottom = bottomTxt
         end
@@ -213,7 +217,7 @@ function ESP:Add(target: Instance, options: table?)
 
     if showHealthbar then
         local segments = {}
-        local numSegments = 500  -- Ultra-smooth gradient
+        local numSegments = 1000  -- Ultra-smooth gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -437,7 +441,7 @@ function ESP:UpdateESP(data)
         end
 
         if data.Drawings.Texts.health and humanoid then
-            data.Drawings.Texts.health.Text = math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
+            data.Drawings.Texts.health.Text = tostring(math.floor(humanoid.Health))
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(0, 0)  -- Adjust to next to healthbar
             data.Drawings.Texts.health.Position = barPos + Vector2.new(-50, bbox.Size.Y / 2)  -- Left of healthbar
             data.Drawings.Texts.health.Visible = isVisible
@@ -446,8 +450,8 @@ function ESP:UpdateESP(data)
         end
 
         if data.Drawings.Texts.bottom then
-            data.Drawings.Texts.bottom.Text = backpackCount .. ", " .. math.floor(dist) .. "m"
-            data.Drawings.Texts.bottom.Position = bbox.Position + Vector2.new(0, bbox.Size.Y / 2 + 30)
+            data.Drawings.Texts.bottom.Text = "[" .. math.floor(dist) .. "m]"
+            data.Drawings.Texts.bottom.Position = bbox.Position + Vector2.new(0, bbox.Size.Y / 2 + 15)
             data.Drawings.Texts.bottom.Visible = isVisible
         end
     end
@@ -465,8 +469,8 @@ function ESP:UpdateESP(data)
                 barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
             end
             if data.Drawings.HealthbarOutline then
-                data.Drawings.HealthbarOutline.Position = barPos
-                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth, barHeight)
+                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(0, 0.5)
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth, barHeight + 1)
                 data.Drawings.HealthbarOutline.Visible = isVisible
             end
             if data.Drawings.HealthFillSegments then
@@ -563,6 +567,52 @@ function ESP:SetVisible(visible: boolean)
             data.Highlight.Enabled = visible
         end
     end
+end
+
+-- Auto-add ESP to new players
+function ESP:AutoAdd(options: table)
+    if playerAddedConnection then playerAddedConnection:Disconnect() end
+    if playerRemovingConnection then playerRemovingConnection:Disconnect() end
+
+    autoAddOptions = options
+    local Players = game:GetService("Players")
+
+    local function addPlayer(player: Player)
+        if player == Players.LocalPlayer then return end
+
+        local function onCharacter(char: Model)
+            if char then pcall(function() ESP:Add(char, options) end) end
+        end
+
+        if player.Character then pcall(function() onCharacter(player.Character) end) end
+        player.CharacterAdded:Connect(onCharacter)
+    end
+
+    local function removePlayer(player: Player)
+        if player.Character then pcall(function() ESP:Remove(player.Character) end) end
+    end
+
+    -- Add to existing players
+    for _, player in ipairs(Players:GetPlayers()) do
+        pcall(function() addPlayer(player) end)
+    end
+
+    -- Connect to new players
+    playerAddedConnection = Players.PlayerAdded:Connect(addPlayer)
+    playerRemovingConnection = Players.PlayerRemoving:Connect(removePlayer)
+end
+
+-- Stop auto-adding ESP
+function ESP:StopAutoAdd()
+    if playerAddedConnection then
+        playerAddedConnection:Disconnect()
+        playerAddedConnection = nil
+    end
+    if playerRemovingConnection then
+        playerRemovingConnection:Disconnect()
+        playerRemovingConnection = nil
+    end
+    autoAddOptions = nil
 end
 
 return ESP
