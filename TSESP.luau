@@ -1,5 +1,5 @@
 --[[
-	TrisSplpit ESP Library
+	TrisSploit ESP Library
 ]]
 
 local TSESP = {
