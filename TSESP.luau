@@ -209,7 +209,7 @@ function ESP:Add(target: Instance, options: table?)
 
     if showHealthbar then
         local segments = {}
-        local numSegments = 20  -- Increased for smoother gradient
+        local numSegments = 50  -- Increased for ultra-smooth gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -478,7 +478,7 @@ function ESP:UpdateESP(data)
                 local fill = segments[i]
                 local yOffset = (i-1) * heightPerSegment
                 fill.Position = barPos + Vector2.new(0, yOffset)
-                fill.Size = Vector2.new(barWidth, heightPerSegment)
+                fill.Size = Vector2.new(barWidth, heightPerSegment + 1)  -- Slight overlap to remove lines
                 if (i / numSegments) <= healthPercent then
                     if options.HealthbarGradient then
                         local t = tick() * options.GradientSpeed
