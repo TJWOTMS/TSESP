@@ -198,39 +198,57 @@ function ESP:Add(target: Instance, options: table?)
         espData.Highlight = highlight
     end
 
+    -- Use BillboardGui for text instead of Drawing for better scaling and positioning
     if showText or showName or showHealth or showDistance then
+        local billboardGui = Instance.new("BillboardGui")
+        billboardGui.Size = UDim2.new(0, 200, 0, 100)
+        billboardGui.AlwaysOnTop = true
+        billboardGui.Enabled = isVisible
+        billboardGui.Adornee = model
+        billboardGui.StudsOffset = Vector3.new(0, 0, 0)
+        espData.BillboardGui = billboardGui
+
         local texts = {}
+        local yOffset = 0
         if showName then
-            local nameTxt = Drawing.new("Text")
-            nameTxt.Color = color
-            nameTxt.Size = textSize
-            nameTxt.Center = true
-            nameTxt.Outline = true
-            nameTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
-            nameTxt.Visible = isVisible
-            texts.name = nameTxt
+            local nameLabel = Instance.new("TextLabel")
+            nameLabel.Size = UDim2.new(1, 0, 0, 20)
+            nameLabel.Position = UDim2.new(0, 0, 0, yOffset)
+            nameLabel.BackgroundTransparency = 1
+            nameLabel.TextColor3 = color
+            nameLabel.TextSize = textSize
+            nameLabel.Font = Enum.Font[font] or Enum.Font.Gotham
+            nameLabel.TextStrokeTransparency = 0
+            nameLabel.Parent = billboardGui
+            texts.name = nameLabel
+            yOffset = yOffset + 20
         end
         if showHealth then
-            local healthTxt = Drawing.new("Text")
-            healthTxt.Color = color
-            healthTxt.Size = textSize
-            healthTxt.Center = false  -- Left align for next to healthbar
-            healthTxt.Outline = true
-            healthTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
-            healthTxt.Visible = isVisible
-            texts.health = healthTxt
+            local healthLabel = Instance.new("TextLabel")
+            healthLabel.Size = UDim2.new(1, 0, 0, 20)
+            healthLabel.Position = UDim2.new(0, 0, 0, yOffset)
+            healthLabel.BackgroundTransparency = 1
+            healthLabel.TextColor3 = color
+            healthLabel.TextSize = textSize
+            healthLabel.Font = Enum.Font[font] or Enum.Font.Gotham
+            healthLabel.TextStrokeTransparency = 0
+            healthLabel.Parent = billboardGui
+            texts.health = healthLabel
+            yOffset = yOffset + 20
         end
         if showDistance then
-            local bottomTxt = Drawing.new("Text")
-            bottomTxt.Color = color
-            bottomTxt.Size = textSize
-            bottomTxt.Center = true
-            bottomTxt.Outline = true
-            bottomTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
-            bottomTxt.Visible = isVisible
-            texts.bottom = bottomTxt
+            local distanceLabel = Instance.new("TextLabel")
+            distanceLabel.Size = UDim2.new(1, 0, 0, 20)
+            distanceLabel.Position = UDim2.new(0, 0, 0, yOffset)
+            distanceLabel.BackgroundTransparency = 1
+            distanceLabel.TextColor3 = color
+            distanceLabel.TextSize = textSize
+            distanceLabel.Font = Enum.Font[font] or Enum.Font.Gotham
+            distanceLabel.TextStrokeTransparency = 0
+            distanceLabel.Parent = billboardGui
+            texts.distance = distanceLabel
         end
-        espData.Drawings.Texts = texts
+        espData.Texts = texts
     end
 
     if showHealthbar then
@@ -287,6 +305,7 @@ function ESP:UpdateESP(data)
             end
         end
         if data.Highlight then data.Highlight.Enabled = false end
+        if data.BillboardGui then data.BillboardGui.Enabled = false end
         return
     end
 
@@ -327,6 +346,7 @@ function ESP:UpdateESP(data)
             end
         end
         if data.Highlight then data.Highlight.Enabled = false end
+        if data.BillboardGui then data.BillboardGui.Enabled = false end
         return
     end
 
@@ -395,7 +415,7 @@ function ESP:UpdateESP(data)
         if data.Drawings.CornerLines then for _, l in pairs(data.Drawings.CornerLines) do l.Visible = false end end
         if data.Drawings.CornerOutlines then for _, l in pairs(data.Drawings.CornerOutlines) do l.Visible = false end end
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
-        if data.Drawings.Texts then for _, txt in pairs(data.Drawings.Texts) do txt.Visible = false end end
+        if data.Texts then for _, txt in pairs(data.Texts) do txt.Visible = false end end
         if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
         if data.Drawings.HealthFillSegments then for _, d in pairs(data.Drawings.HealthFillSegments) do d.Visible = false end end
         return
@@ -536,65 +556,29 @@ function ESP:UpdateESP(data)
         data.Drawings.Tracer.Visible = isVisible
     end
 
-    -- Update texts
-    if data.Drawings.Texts then
-        local baseTextSize = options.TextSize or 14
-        local textSizeScaled = math.clamp(baseTextSize * scale, 8, 40)
-        if data.Drawings.Texts.name then
-            data.Drawings.Texts.name.Size = textSizeScaled
-            data.Drawings.Texts.name.Color = currentColor
-            -- anchor name to head (preferred) or to bbox top as fallback, then clamp to viewport
-            local head = model:FindFirstChild("Head")
-            local namePos
-            if head and camera then
-                local hp, onS = camera:WorldToViewportPoint(head.Position + Vector3.new(0, (head.Size and head.Size.Y or 1) / 2 + 0.2, 0))
-                namePos = Vector2.new(hp.X, hp.Y - (textSizeScaled + 12 * scale))
-            else
-                namePos = bbox.Position + Vector2.new(0, -bbox.Size.Y/2 - (textSizeScaled + 12 * scale))
+    -- Update BillboardGui text
+    if data.BillboardGui then
+        data.BillboardGui.Enabled = isVisible
+        local texts = data.Texts
+        if texts then
+            local humanoid = model:FindFirstChildOfClass("Humanoid")
+            if texts.name then
+                texts.name.Text = options.Text or target.Name
+                texts.name.TextColor3 = currentColor
+                texts.name.Visible = isVisible
             end
-            -- clamp to viewport with small margin
-            local vp = camera.ViewportSize
-            local margin = 8
-            namePos = Vector2.new(math.clamp(namePos.X, margin, vp.X - margin), math.clamp(namePos.Y, margin, vp.Y - margin))
-            data.Drawings.Texts.name.Position = namePos
-        end
-        if data.Drawings.Texts.health then
-            data.Drawings.Texts.health.Size = textSizeScaled
-            data.Drawings.Texts.health.Color = currentColor
-            -- position health text next to the healthbar (barPos is calculated below)
-            -- we'll set it after healthbar computation to ensure correct anchoring
-        end
-        if data.Drawings.Texts.bottom then
-            data.Drawings.Texts.bottom.Size = textSizeScaled
-            data.Drawings.Texts.bottom.Color = currentColor
-            -- anchor bottom text to HumanoidRootPart if available, fallback to bbox bottom, then clamp
-            local bottomPos = bbox.Position + Vector2.new(0, bbox.Size.Y/2 + (textSizeScaled/2 + 8 * scale))
-            local vp = camera.ViewportSize
-            bottomPos = Vector2.new(math.clamp(bottomPos.X, 0, vp.X), math.clamp(bottomPos.Y, 0, vp.Y))
-            data.Drawings.Texts.bottom.Position = bottomPos
-        end
-        local humanoid = model:FindFirstChildOfClass("Humanoid")
-        local player = game.Players:GetPlayerFromCharacter(model)
-        local backpackCount = 0
-        if player and player:FindFirstChild("Backpack") then
-            backpackCount = #player.Backpack:GetChildren()
-        end
-
-        if data.Drawings.Texts.name then
-            data.Drawings.Texts.name.Text = options.Text or target.Name
-            data.Drawings.Texts.name.Visible = isVisible
-        end
-
-        if data.Drawings.Texts.health and humanoid then
-            data.Drawings.Texts.health.Text = tostring(math.floor(humanoid.Health))
-            data.Drawings.Texts.health.Visible = isVisible
-        elseif data.Drawings.Texts.health then
-            data.Drawings.Texts.health.Visible = false
-        end
-
-        if data.Drawings.Texts.bottom then
-            data.Drawings.Texts.bottom.Text = "[" .. math.floor(dist) .. "m]"
-            data.Drawings.Texts.bottom.Visible = isVisible
+            if texts.health and humanoid then
+                texts.health.Text = tostring(math.floor(humanoid.Health))
+                texts.health.TextColor3 = currentColor
+                texts.health.Visible = isVisible
+            elseif texts.health then
+                texts.health.Visible = false
+            end
+            if texts.distance then
+                texts.distance.Text = "[" .. math.floor(dist) .. "m]"
+                texts.distance.TextColor3 = currentColor
+                texts.distance.Visible = isVisible
+            end
         end
     end
 
@@ -662,15 +646,6 @@ function ESP:UpdateESP(data)
                 data.Drawings.HealthbarOutline.Thickness = outlineTh
                 data.Drawings.HealthbarOutline.Visible = isVisible
             end
-            -- set health text next to bar now that barPos/barWidth computed
-            if data.Drawings.Texts and data.Drawings.Texts.health then
-                local ht = data.Drawings.Texts.health
-                -- place health text to left of the bar, vertically centered on the bbox (not the bar)
-                local desired = Vector2.new(barPos.X - (barWidth/2 + 6 * scale), bbox.Position.Y)
-                local vp = camera.ViewportSize
-                desired = Vector2.new(math.clamp(desired.X, 0, vp.X), math.clamp(desired.Y, 0, vp.Y))
-                ht.Position = desired
-            end
         else
             if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
             if data.Drawings.HealthFillSegments then
@@ -699,6 +674,10 @@ function ESP:Remove(target: Instance)
 
     if data.Highlight then
         data.Highlight:Destroy()
+    end
+
+    if data.BillboardGui then
+        data.BillboardGui:Destroy()
     end
 
     activeESPs[target] = nil
@@ -734,6 +713,9 @@ function ESP:SetVisible(visible: boolean)
         end
         if data.Highlight then
             data.Highlight.Enabled = visible
+        end
+        if data.BillboardGui then
+            data.BillboardGui.Enabled = visible
         end
     end
 end
