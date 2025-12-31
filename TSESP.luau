@@ -1,14 +1,33 @@
--- Universal ESP Library for Roblox LuaU
--- Compatible with executors that support Drawing API
--- API: ESP:Add(target, options), ESP:Remove(target), ESP:Clear(), ESP:SetVisible(bool)
+--[[
+ _________  ________  ___  ________   ________  ________  ___       ________  ___  _________
+|\___   ___\\   __  \|\  \|\   ____\ |\   ____\|\   __  \|\  \     |\   __  \|\  \|\___   ___\
+\|___ \  \_\ \  \|\  \ \  \ \  \___|_\ \  \___|\ \  \|\  \ \  \    \ \  \|\  \ \  \|___ \  \_|
+     \ \  \ \ \   _  _\ \  \ \_____  \\ \_____  \ \   ____\ \  \    \ \  \\\  \ \  \   \ \  \
+      \ \  \ \ \  \\  \\ \  \|____|\  \\|____|\  \ \  \___|\ \  \____\ \  \\\  \ \  \   \ \  \
+       \ \__\ \ \__\\ _\\ \__\____\_\  \ ____\_\  \ \__\    \ \_______\ \_______\ \__\   \ \__\
+        \|__|  \|__|\|__|\|__|\_________\\_________\|__|     \|_______|\|_______|\|__|    \|__|
+                             \|_________\|_________|
+
+
+
+
+                       _______   ________  ________        ___       ___  ________  ________  ________  ________      ___    ___
+                      |\  ___ \ |\   ____\|\   __  \      |\  \     |\  \|\   __  \|\   __  \|\   __  \|\   __  \    |\  \  /  /|
+                      \ \   __/|\ \  \___|\ \  \|\  \     \ \  \    \ \  \ \  \|\ /\ \  \|\  \ \  \|\  \ \  \|\  \   \ \  \/  / /
+                       \ \  \_|/_\ \_____  \ \   ____\     \ \  \    \ \  \ \   __  \ \   _  _\ \   __  \ \   _  _\   \ \    / /
+                        \ \  \_|\ \|____|\  \ \  \___|      \ \  \____\ \  \ \  \|\  \ \  \\  \\ \  \ \  \ \  \\  \|   \/  /  /
+                         \ \_______\____\_\  \ \__\          \ \_______\ \__\ \_______\ \__\\ _\\ \__\ \__\ \__\\ _\ __/  / /
+                          \|_______|\_________\|__|           \|_______|\|__|\|_______|\|__|\|__|\|__|\|__|\|__|\|__|\___/ /
+                                   \|_________|                                                                     \|___|/
+
+]]
+
+-- TrisSploit's ESP Library v1.0.0
 
 local ESP = {}
-ESP.__index = ESP
-
--- Internal storage
 local activeESPs = {}
-local renderConnection = nil
 local isVisible = true
+local renderConnection = nil
 
 -- Check if Drawing is available
 if not Drawing then
@@ -76,6 +95,11 @@ end
 -- Add ESP to a target
 function ESP:Add(target: Instance, options: table?)
     if not target or activeESPs[target] then return end
+
+    -- Prevent adding ESP to local player
+    local Players = game:GetService("Players")
+    local localPlayer = Players.LocalPlayer
+    if localPlayer and (target == localPlayer.Character or (localPlayer.Character and target:IsDescendantOf(localPlayer.Character))) then return end
 
     options = options or {}
     local color = options.Color or Color3.new(1, 1, 1)
@@ -184,15 +208,8 @@ function ESP:Add(target: Instance, options: table?)
     end
 
     if showHealthbar then
-        local background = Drawing.new("Square")
-        background.Color = Color3.new(0,0,0)
-        background.Thickness = 1
-        background.Filled = true
-        background.Visible = isVisible
-        espData.Drawings.HealthBackground = background
-
         local segments = {}
-        local numSegments = 10
+        local numSegments = 20  -- Increased for smoother gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -250,7 +267,8 @@ function ESP:UpdateESP(data)
     if not camera then return end
 
     local pivot = model:GetPivot()
-    local pos, onScreen = camera:WorldToViewportPoint(pivot.Position)
+    local screenPos3, onScreen = camera:WorldToViewportPoint(pivot.Position)
+    local screenPos = Vector2.new(screenPos3.X, screenPos3.Y)
     local dist = getDistance(pivot.Position)
     local options = data.Options
 
@@ -285,7 +303,7 @@ function ESP:UpdateESP(data)
             -- calculate edge pos
             local viewportSize = camera.ViewportSize
             local center = viewportSize / 2
-            local dir = (pos - center).Unit
+            local dir = (screenPos - center).Unit
             local edgeDist = math.min(viewportSize.X, viewportSize.Y) / 2
             local edgePos = center + dir * edgeDist
             -- set triangle points for arrow
@@ -311,7 +329,6 @@ function ESP:UpdateESP(data)
         if data.Drawings.Box3DLines then for _, l in pairs(data.Drawings.Box3DLines) do l.Visible = false end end
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
         if data.Drawings.Text then data.Drawings.Text.Visible = false end
-        if data.Drawings.HealthBackground then data.Drawings.HealthBackground.Visible = false end
         if data.Drawings.HealthFillSegments then for _, d in pairs(data.Drawings.HealthFillSegments) do d.Visible = false end end
         return
     end
@@ -374,8 +391,8 @@ function ESP:UpdateESP(data)
             CFrame.new(size.X/2, size.Y/2, size.Z/2),
         }) do
             local worldPos = (cf * offset).Position
-            local screenPos = camera:WorldToViewportPoint(worldPos)
-            corners[i] = screenPos
+            local screenPos3 = camera:WorldToViewportPoint(worldPos)
+            corners[i] = Vector2.new(screenPos3.X, screenPos3.Y)
         end
         local lines = data.Drawings.Box3DLines
         -- front face
@@ -447,49 +464,41 @@ function ESP:UpdateESP(data)
     end
 
     -- Update healthbar
-    if data.Drawings.HealthBackground or data.Drawings.HealthFillSegments then
+    if data.Drawings.HealthFillSegments then
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
             local barWidth = 5
             local barHeight = bbox.Size.Y
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 2, 0)
-            if data.Drawings.HealthBackground then
-                data.Drawings.HealthBackground.Position = barPos
-                data.Drawings.HealthBackground.Size = Vector2.new(barWidth, barHeight)
-                data.Drawings.HealthBackground.Visible = isVisible
-            end
-            if data.Drawings.HealthFillSegments then
-                local segments = data.Drawings.HealthFillSegments
-                local numSegments = #segments
-                local heightPerSegment = barHeight / numSegments
-                for i = 1, numSegments do
-                    local fill = segments[i]
-                    local yOffset = (i-1) * heightPerSegment
-                    fill.Position = barPos + Vector2.new(0, yOffset)
-                    fill.Size = Vector2.new(barWidth, heightPerSegment)
-                    if (i / numSegments) <= healthPercent then
-                        if options.HealthbarGradient then
-                            local t = tick() * options.GradientSpeed
-                            local offset = t % 1
-                            local frac = ((i-1) / numSegments + offset) % 1
-                            local numColors = #options.GradientColors
-                            local colorIndex = math.floor(frac * numColors) + 1
-                            local nextIndex = colorIndex % numColors + 1
-                            local lerpFrac = (frac * numColors) % 1
-                            local color = options.GradientColors[colorIndex]:Lerp(options.GradientColors[nextIndex], lerpFrac)
-                            fill.Color = color
-                        else
-                            fill.Color = options.Color or Color3.new(1,1,1)
-                        end
-                        fill.Visible = isVisible
+            local segments = data.Drawings.HealthFillSegments
+            local numSegments = #segments
+            local heightPerSegment = barHeight / numSegments
+            for i = 1, numSegments do
+                local fill = segments[i]
+                local yOffset = (i-1) * heightPerSegment
+                fill.Position = barPos + Vector2.new(0, yOffset)
+                fill.Size = Vector2.new(barWidth, heightPerSegment)
+                if (i / numSegments) <= healthPercent then
+                    if options.HealthbarGradient then
+                        local t = tick() * options.GradientSpeed
+                        local offset = t % 1
+                        local frac = ((i-1) / numSegments + offset) % 1
+                        local numColors = #options.GradientColors
+                        local colorIndex = math.floor(frac * numColors) + 1
+                        local nextIndex = colorIndex % numColors + 1
+                        local lerpFrac = (frac * numColors) % 1
+                        local color = options.GradientColors[colorIndex]:Lerp(options.GradientColors[nextIndex], lerpFrac)
+                        fill.Color = color
                     else
-                        fill.Visible = false
+                        fill.Color = options.Color or Color3.new(1,1,1)
                     end
+                    fill.Visible = isVisible
+                else
+                    fill.Visible = false
                 end
             end
         else
-            if data.Drawings.HealthBackground then data.Drawings.HealthBackground.Visible = false end
             if data.Drawings.HealthFillSegments then
                 for _, fill in pairs(data.Drawings.HealthFillSegments) do
                     fill.Visible = false
