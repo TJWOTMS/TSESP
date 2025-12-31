@@ -1,1341 +1,771 @@
---[[
-	TrisSplpit ESP Library
-]]
-
-local TSESP = {
-	Version = "1.0.0",
-	Author = "TrisSploit",
-	_instances = {},
-	_partInstances = {},
-	_connections = {},
-	_cache = {},
-	_renderStep = nil,
-}
-
-local RunService = game:GetService("RunService")
+-- TSESP - Lightweight ESP Library for executors (Luau)
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local Camera = Workspace.CurrentCamera
-local LocalPlayer = Players.LocalPlayer
 
--- Configuration defaults
-local DefaultConfig = {
-	Enabled = true,
-	TeamCheck = false,
-	AliveCheck = true,
-	MaxDistance = 1000,
-	
-	-- Box ESP
-	Box = {
-		Enabled = true,
-		Color = Color3.fromRGB(255, 255, 255),
-		Thickness = 2,
-		Filled = false,
-		FillTransparency = 0.8,
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-	},
-	
-	-- Tracer
-	Tracer = {
-		Enabled = false,
-		Color = Color3.fromRGB(255, 255, 255),
-		Thickness = 1.5,
-		Transparency = 1,
-		From = "Bottom", -- "Top", "Center", "Bottom", "Mouse"
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-	},
-	
-	-- Name ESP
-	Name = {
-		Enabled = true,
-		Color = Color3.fromRGB(255, 255, 255),
-		Size = 14,
-		Font = (Drawing.Fonts.SFPixelate or Drawing.Fonts['SF Pixelate'] or Drawing.Fonts.Monospace),
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-		DisplayDistance = true,
-		DisplayHealth = false,
-	},
-	
-	-- Health Bar
-	HealthBar = {
-		Enabled = true,
-		Position = "Right", -- "Left", "Right", "Top", "Bottom"
-		Size = 2,
-		Color = Color3.fromRGB(0, 255, 0),
-		LowHealthColor = Color3.fromRGB(255, 0, 0),
-		Outline = true,
-		OutlineColor = Color3.fromRGB(0, 0, 0),
-		LerpColor = true,
-		Gradient = {
-			Enabled = false,
-			Colors = {
-				Color3.fromRGB(0, 255, 0),
-				Color3.fromRGB(0, 170, 255),
-				Color3.fromRGB(255, 0, 170),
-			},
-			Speed = 0.75, -- cycles per second
-			Slices = 36,
-		},
-	},
-	
-	-- Chams (Highlight)
-	Chams = {
-		Enabled = false,
-		FillColor = Color3.fromRGB(255, 0, 0),
-		FillTransparency = 0.5,
-		OutlineColor = Color3.fromRGB(255, 255, 255),
-		OutlineTransparency = 0,
-	},
+local Camera = Workspace.CurrentCamera
+
+local Drawing = Drawing
+
+local TSESP = {}
+TSESP.__index = TSESP
+
+local function resolveFont(f)
+    if typeof(f) == "EnumItem" then return f end
+    if type(f) == "string" then
+        local ef = Enum.Font[f]
+        if ef then return ef end
+    end
+    if Enum and Enum.Font and Enum.Font.SFPixelate then
+        return Enum.Font.SFPixelate
+    end
+    return Enum.Font.SourceSans
+end
+
+TSESP.Settings = {
+    Enabled = true,
+    Box = true,
+    Name = true,
+    Tracer = true,
+    Healthbar = true,
+    HealthbarGradient = false,
+    GradientColors = {Color3.fromRGB(255,0,0), Color3.fromRGB(255,255,0), Color3.fromRGB(0,255,0)},
+    GradientSpeed = 1, -- cycles per second
+    GradientSegments = 12,
+    TeamColor = true,
+    VisibleCheck = true,
+    MaxDistance = 1000,
+    Thickness = 1,
+    Font = resolveFont("SFPixelate"),
+    Outline = true,
+    Color = Color3.fromRGB(255,255,255),
+    TracerFrom = "Bottom", -- "Bottom" | "Top" | "Center"
 }
 
--- Utility Functions
-local Utilities = {}
+TSESP._players = {}
 
-function Utilities:IsAlive(player)
-	if not player or not player.Character then
-		return false
-	end
-	
-	local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-	local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
-	
-	return humanoid and rootPart and humanoid.Health > 0
+local function isDrawingAvailable()
+    return type(Drawing) == "table" or type(Drawing) == "function"
 end
 
-function Utilities:GetTeam(player)
-	return player.Team
+local function safeWorldToViewport(pos)
+    if not Camera or not Camera.WorldToViewportPoint then
+        return Vector2.new(0,0), 0, false
+    end
+    local x,y,z = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(x,y), z, z > 0
 end
 
-function Utilities:IsOnScreen(position)
-	local _, onScreen = Camera:WorldToViewportPoint(position)
-	return onScreen
+local function createDrawing(kind)
+    if not isDrawingAvailable() then return nil end
+    local ok, obj = pcall(function() return Drawing.new(kind) end)
+    if not ok then return nil end
+    return obj
 end
 
-function Utilities:GetDistance(position)
-	if not Camera then return math.huge end
-	return (Camera.CFrame.Position - position).Magnitude
+local function lerp(a,b,t)
+    return a + (b - a) * t
 end
 
-function Utilities:GetScreenPosition(position)
-	local screenPos, onScreen = Camera:WorldToViewportPoint(position)
-	return Vector2.new(screenPos.X, screenPos.Y), onScreen
+local function lerpColor(c1, c2, t)
+    return Color3.new(lerp(c1.R, c2.R, t), lerp(c1.G, c2.G, t), lerp(c1.B, c2.B, t))
 end
 
-function Utilities:GetBoundingBox(character)
-	if not character then return nil end
-
-	-- Collect baseparts but ignore very large parts (common with accessories)
-	local parts = {}
-	for _, obj in ipairs(character:GetDescendants()) do
-		if obj:IsA("BasePart") and obj.Size then
-			if obj.Transparency < 0.95 then
-				local maxDim = math.max(obj.Size.X, obj.Size.Y, obj.Size.Z)
-				if maxDim <= 6 then
-					table.insert(parts, obj)
-				end
-			end
-		end
-	end
-
-	if #parts == 0 then
-		-- fallback to root-based estimate
-		local root = character:FindFirstChild("HumanoidRootPart")
-		if not root then return nil end
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		local height = (humanoid and humanoid.RigType == Enum.HumanoidRigType.R15) and 2.5 or 2.8
-		local width = 1.5
-
-		local cf = root.CFrame
-		local topLeft = cf * CFrame.new(-width, height, 0)
-		local topRight = cf * CFrame.new(width, height, 0)
-		local bottomLeft = cf * CFrame.new(-width, -height, 0)
-		local bottomRight = cf * CFrame.new(width, -height, 0)
-
-		local tl, tlVis = self:GetScreenPosition(topLeft.Position)
-		local tr, trVis = self:GetScreenPosition(topRight.Position)
-		local bl, blVis = self:GetScreenPosition(bottomLeft.Position)
-		local br, brVis = self:GetScreenPosition(bottomRight.Position)
-
-		if not (tlVis or trVis or blVis or brVis) then
-			return nil
-		end
-
-		local minX = math.min(tl.X, tr.X, bl.X, br.X)
-		local maxX = math.max(tl.X, tr.X, bl.X, br.X)
-		local minY = math.min(tl.Y, tr.Y, bl.Y, br.Y)
-		local maxY = math.max(tl.Y, tr.Y, bl.Y, br.Y)
-
-		return { Position = Vector2.new(minX, minY), Size = Vector2.new(maxX - minX, maxY - minY) }
-	end
-
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local anyVisible = false
-
-	for _, part in ipairs(parts) do
-		local half = part.Size * 0.5
-		local corners = {
-			Vector3.new(half.X, half.Y, half.Z),
-			Vector3.new(half.X, half.Y, -half.Z),
-			Vector3.new(half.X, -half.Y, half.Z),
-			Vector3.new(half.X, -half.Y, -half.Z),
-			Vector3.new(-half.X, half.Y, half.Z),
-			Vector3.new(-half.X, half.Y, -half.Z),
-			Vector3.new(-half.X, -half.Y, half.Z),
-			Vector3.new(-half.X, -half.Y, -half.Z),
-		}
-
-		for _, corner in ipairs(corners) do
-			local worldPos = part.CFrame:PointToWorldSpace(corner)
-			local screenPos, onScreen = self:GetScreenPosition(worldPos)
-			if onScreen then
-				anyVisible = true
-				minX = math.min(minX, screenPos.X)
-				maxX = math.max(maxX, screenPos.X)
-				minY = math.min(minY, screenPos.Y)
-				maxY = math.max(maxY, screenPos.Y)
-			end
-		end
-	end
-
-	if not anyVisible then return nil end
-
-	return { Position = Vector2.new(minX, minY), Size = Vector2.new(maxX - minX, maxY - minY) }
+local function sampleGradient(colors, t)
+    local n = #colors
+    if n == 0 then return Color3.new(1,1,1) end
+    if n == 1 then return colors[1] end
+    t = math.clamp(t, 0, 1)
+    local total = (n - 1)
+    local scaled = t * total
+    local idx = math.floor(scaled) + 1
+    if idx >= n then return colors[n] end
+    local localT = scaled - (idx - 1)
+    return lerpColor(colors[idx], colors[idx + 1], localT)
 end
 
-function Utilities:GetPartBoundingBox(part)
-	if not part or not part.CFrame or not part.Size then
-		return nil
-	end
-
-	local half = part.Size * 0.5
-	local corners = {
-		Vector3.new(half.X, half.Y, half.Z),
-		Vector3.new(half.X, half.Y, -half.Z),
-		Vector3.new(half.X, -half.Y, half.Z),
-		Vector3.new(half.X, -half.Y, -half.Z),
-		Vector3.new(-half.X, half.Y, half.Z),
-		Vector3.new(-half.X, half.Y, -half.Z),
-		Vector3.new(-half.X, -half.Y, half.Z),
-		Vector3.new(-half.X, -half.Y, -half.Z),
-	}
-
-	local minX, minY = math.huge, math.huge
-	local maxX, maxY = -math.huge, -math.huge
-	local anyVisible = false
-
-	for _, corner in ipairs(corners) do
-		local worldPos = part.CFrame:PointToWorldSpace(corner)
-		local screenPos, onScreen = self:GetScreenPosition(worldPos)
-		if onScreen then
-			anyVisible = true
-			minX = math.min(minX, screenPos.X)
-			maxX = math.max(maxX, screenPos.X)
-			minY = math.min(minY, screenPos.Y)
-			maxY = math.max(maxY, screenPos.Y)
-		end
-	end
-
-	if not anyVisible then
-		return nil
-	end
-
-	return {
-		Position = Vector2.new(minX, minY),
-		Size = Vector2.new(maxX - minX, maxY - minY),
-	}
+local function getCharacterRoot(character)
+    return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
 end
 
-function Utilities:LerpColor(from, to, alpha)
-	return Color3.new(
-		from.R + (to.R - from.R) * alpha,
-		from.G + (to.G - from.G) * alpha,
-		from.B + (to.B - from.B) * alpha
-	)
+local function getHumanoid(character)
+    return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-function Utilities:GetCycleColor(gradientConfig)
-	local colors = gradientConfig and gradientConfig.Colors
-	if not colors or #colors < 2 then
-		return nil
-	end
-
-	local speed = gradientConfig.Speed or 1
-	-- returns single cycling color (kept for backwards compatibility)
-	local s = (tick() * speed) % #colors
-	local base = math.floor(s) + 1
-	local next = base % #colors + 1
-	local alpha = s - math.floor(s)
-
-	return Utilities:LerpColor(colors[base], colors[next], alpha)
+local function raycastVisible(from, to, ignoreList)
+    if not Workspace.Raycast then return true end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = ignoreList or {}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local dir = to - from
+    local result = Workspace:Raycast(from, dir, params)
+    return result == nil
 end
 
-function Utilities:GetGradientColor(gradientConfig, t)
-	-- t is 0..1 position along gradient (0 = top/left, 1 = bottom/right)
-	local colors = gradientConfig and gradientConfig.Colors
-	if not colors or #colors == 0 then return Color3.new(1,1,1) end
+local function makeESPForPlayer(player, settings)
+    local obj = {}
+    obj.Player = player
+    obj.Settings = settings or {}
+    obj.Enabled = true
+    obj.Drawings = {}
 
-	-- normalize t
-	t = math.clamp(t, 0, 1)
-	local total = #colors - 1
-	if total <= 0 then return colors[1] end
+    if isDrawingAvailable() then
+        obj.Drawings.Box = createDrawing("Square")
+        obj.Drawings.Tracer = createDrawing("Line")
+        obj.Drawings.Name = createDrawing("Text")
+        obj.Drawings.HealthBack = createDrawing("Square")
+        obj.Drawings.HealthFront = createDrawing("Square")
+        obj.Drawings.HealthSegments = {}
+    end
 
-	local scaled = t * total
-	local idx = math.floor(scaled) + 1
-	local nxt = math.min(idx + 1, #colors)
-	local alpha = scaled - math.floor(scaled)
-	return Utilities:LerpColor(colors[idx], colors[nxt], alpha)
+    function obj:SetEnabled(val)
+        self.Enabled = val and true or false
+        for _,v in pairs(self.Drawings) do
+            if type(v) == "table" then
+                for _,seg in pairs(v) do if seg and seg.Visible ~= nil then seg.Visible = self.Enabled end end
+            else
+                if v and v.Visible ~= nil then v.Visible = self.Enabled end
+            end
+        end
+    end
+
+    function obj:SetOption(k,v)
+        self.Settings[k] = v
+    end
+
+    function obj:Remove()
+        for _,v in pairs(self.Drawings) do
+            if type(v) == "table" then
+                for _,seg in pairs(v) do if seg and type(seg.Remove) == "function" then pcall(function() seg:Remove() end) end end
+            else
+                if v and type(v.Remove) == "function" then pcall(function() v:Remove() end) end
+            end
+        end
+        self.Drawings = {}
+        self.Enabled = false
+    end
+
+    return obj
 end
 
--- Drawing Object Manager
-local DrawingCache = {}
-
-function DrawingCache:Create(type)
-	local drawing = Drawing.new(type)
-	return drawing
+local function ensureSegments(eobj, count)
+    if not isDrawingAvailable() then return end
+    eobj.Drawings.HealthSegments = eobj.Drawings.HealthSegments or {}
+    local segs = eobj.Drawings.HealthSegments
+    while #segs < count do
+        local n = createDrawing("Square")
+        table.insert(segs, n)
+    end
+    while #segs > count do
+        local s = table.remove(segs)
+        if s and type(s.Remove) == "function" then pcall(function() s:Remove() end) end
+    end
 end
 
-function DrawingCache:Remove(drawing)
-	if drawing then
-		drawing:Remove()
-	end
+local function updateESPObject(eobj)
+    local plr = eobj.Player
+    local settings = eobj.Settings
+    local char = plr and plr.Character
+    if not plr or not char then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local root = getCharacterRoot(char)
+    local head = char:FindFirstChild("Head")
+    local humanoid = getHumanoid(char)
+    if not root or not head then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local camPos = Camera and Camera.CFrame and Camera.CFrame.Position or Workspace.CurrentCamera.CFrame.Position
+    local headPos = head.Position
+    local rootPos = root.Position
+
+    local headScreen, headZ, headOnScreen = safeWorldToViewport(headPos)
+    local rootScreen, rootZ, rootOnScreen = safeWorldToViewport(rootPos)
+
+    local dist = (camPos - rootPos).Magnitude
+    if dist > (settings.MaxDistance or TSESP.Settings.MaxDistance) then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local visible = true
+    if settings.VisibleCheck ~= false and TSESP.Settings.VisibleCheck then
+        visible = raycastVisible(camPos, headPos, {char})
+    end
+
+    local color = settings.Color or TSESP.Settings.Color
+    if settings.TeamColor and plr.Team and plr.TeamColor then
+        color = plr.TeamColor.Color
+    end
+
+    local onScreen = headOnScreen and rootOnScreen
+    if not onScreen or not visible then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local height = math.abs(headScreen.Y - rootScreen.Y)
+    local width = math.max(10, height * 0.5)
+    local boxPos = Vector2.new(rootScreen.X - width/2, rootScreen.Y - height/2)
+
+    -- Box
+    if eobj.Drawings.Box and (settings.Box or TSESP.Settings.Box) then
+        local box = eobj.Drawings.Box
+        box.Size = Vector2.new(width, height)
+        box.Position = Vector2.new(rootScreen.X - width/2, rootScreen.Y - height/2)
+        box.Thickness = settings.Thickness or TSESP.Settings.Thickness
+        box.Color = color
+        box.Filled = false
+        box.Visible = true
+    elseif eobj.Drawings.Box then eobj.Drawings.Box.Visible = false end
+
+    -- Name
+    if eobj.Drawings.Name and (settings.Name or TSESP.Settings.Name) then
+        local txt = eobj.Drawings.Name
+        local nameText = plr.Name
+        if settings.Distance or TSESP.Settings.Distance then
+            nameText = nameText .. " (" .. tostring(math.floor(dist)) .. "m)"
+        end
+        txt.Text = nameText
+        txt.Size = 16
+        txt.Font = (settings.Font or TSESP.Settings.Font)
+        txt.Position = Vector2.new(headScreen.X, headScreen.Y - (height/2) - 18)
+        txt.Color = color
+        txt.Center = true
+        txt.Outline = TSESP.Settings.Outline
+        txt.Visible = true
+    elseif eobj.Drawings.Name then eobj.Drawings.Name.Visible = false end
+
+    -- Tracer
+    if eobj.Drawings.Tracer and (settings.Tracer or TSESP.Settings.Tracer) then
+        local tri = eobj.Drawings.Tracer
+        local from = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+        local tracerFrom = (settings.TracerFrom or TSESP.Settings.TracerFrom)
+        if tracerFrom == "Top" then
+            from = Vector2.new(Camera.ViewportSize.X/2, 0)
+        elseif tracerFrom == "Center" then
+            from = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+        elseif tracerFrom == "Mouse" then
+            local ok, mouse = pcall(function() return Players.LocalPlayer and Players.LocalPlayer:GetMouse() end)
+            if ok and mouse then
+                from = Vector2.new(mouse.X or 0, mouse.Y or 0)
+            end
+        end
+        tri.From = from
+        tri.To = headScreen
+        tri.Color = color
+        tri.Thickness = settings.Thickness or TSESP.Settings.Thickness
+        tri.Visible = true
+    elseif eobj.Drawings.Tracer then eobj.Drawings.Tracer.Visible = false end
+
+    -- Healthbar
+    if settings.Healthbar or TSESP.Settings.Healthbar then
+        local hum = humanoid
+        local maxHp = hum and hum.MaxHealth or 100
+        local hp = hum and hum.Health or maxHp
+        local pct = math.clamp(hp / maxHp, 0, 1)
+
+        local barWidth = math.max(4, width * 0.08)
+        local barHeight = height
+        local backPos = Vector2.new(rootScreen.X - width/2 - barWidth - 4, rootScreen.Y - height/2)
+
+        if settings.HealthbarGradient or TSESP.Settings.HealthbarGradient then
+            -- hide simple front/back
+            if eobj.Drawings.HealthBack then eobj.Drawings.HealthBack.Visible = false end
+            if eobj.Drawings.HealthFront then eobj.Drawings.HealthFront.Visible = false end
+
+            local segCount = settings.GradientSegments or TSESP.Settings.GradientSegments
+            ensureSegments(eobj, segCount)
+            local segs = eobj.Drawings.HealthSegments
+            local speed = settings.GradientSpeed or TSESP.Settings.GradientSpeed
+            local colors = settings.GradientColors or TSESP.Settings.GradientColors
+            local t = tick() * (speed or 1)
+            local offset = (math.sin(t * math.pi * 2) + 1) / 2 -- 0..1 oscillation
+
+            for i=1,segCount do
+                local s = segs[i]
+                if not s then break end
+                local segH = barHeight / segCount
+                local posY = backPos.Y + (i-1) * segH
+                local segVisible = true
+                s.Size = Vector2.new(barWidth - 1, segH + 1)
+                s.Position = Vector2.new(backPos.X + 1, posY)
+                -- sample position along gradient, shifted by offset and wrapped
+                local samplePos = ((i - 1) / (segCount - 1 + 0.0001)) + (offset * 1.0)
+                samplePos = samplePos % 1
+                local col = sampleGradient(colors, 1 - samplePos) -- invert so top->bottom looks natural
+                s.Color = col
+                -- fade segment based on health percentage (only show portion equal to hp)
+                local healthTop = backPos.Y + (1 - pct) * barHeight
+                if posY + segH < healthTop then
+                    segVisible = false
+                end
+                s.Filled = true
+                s.Visible = segVisible
+            end
+        else
+            -- simple bar
+            local back = eobj.Drawings.HealthBack
+            local front = eobj.Drawings.HealthFront
+            if back then
+                back.Size = Vector2.new(barWidth, barHeight)
+                back.Position = backPos
+                back.Color = Color3.fromRGB(40,40,40)
+                back.Filled = true
+                back.Visible = true
+            end
+            if front then
+                front.Size = Vector2.new(barWidth - 1, barHeight * pct)
+                front.Position = Vector2.new(backPos.X + 1, backPos.Y + (barHeight * (1 - pct)))
+                front.Color = Color3.new(1 - (1-pct), pct, 0)
+                front.Filled = true
+                front.Visible = true
+            end
+        end
+    else
+        if eobj.Drawings.HealthBack then eobj.Drawings.HealthBack.Visible = false end
+        if eobj.Drawings.HealthFront then eobj.Drawings.HealthFront.Visible = false end
+        if eobj.Drawings.HealthSegments then
+            for _,s in pairs(eobj.Drawings.HealthSegments) do if s and s.Visible ~= nil then s.Visible = false end end
+        end
+    end
 end
 
--- ESP Instance Class
-local ESPInstance = {}
-ESPInstance.__index = ESPInstance
+-- Public API
+function TSESP:CreateESP(player, opts)
+    if not player then return nil end
+    local settings = {}
+    for k,v in pairs(TSESP.Settings) do settings[k] = v end
+    if type(opts) == "table" then for k,v in pairs(opts) do settings[k] = v end end
 
-function ESPInstance.new(player, config)
-	local self = setmetatable({}, ESPInstance)
-	
-	self.Player = player
-	self.Config = config or DefaultConfig
-	self.Drawings = {}
-	self.Highlight = nil
-	self._charConn = nil
-	self._connections = {}
-	self.Updating = false
-	
-	self:CreateDrawings()
-
-	-- attach character added to recreate highlight reliably
-	if self.Player and self.Player.Character then
-		-- nothing; UpdateHighlight will create if needed
-	end
-	if self.Player then
-		local ok, conn = pcall(function()
-			return self.Player.CharacterAdded:Connect(function(char)
-				-- small delay to allow character to initialize
-				wait(0.1)
-				self:UpdateHighlight()
-			end)
-		end)
-		if ok and conn then
-			self._charConn = conn
-		end
-	end
-	
-	return self
+    local eobj = makeESPForPlayer(player, settings)
+    TSESP._players[player] = eobj
+    return eobj
 end
 
-function ESPInstance:CreateDrawings()
-	-- Box
-	self.Drawings.Box = DrawingCache:Create("Square")
-	self.Drawings.BoxOutline = DrawingCache:Create("Square")
-	
-	-- Tracer
-	self.Drawings.Tracer = DrawingCache:Create("Line")
-	self.Drawings.TracerOutline = DrawingCache:Create("Line")
-	
-	-- Name
-	self.Drawings.Name = DrawingCache:Create("Text")
-	
-	-- Health Bar
-	self.Drawings.HealthBarOutline = DrawingCache:Create("Square")
-	self.Drawings.HealthBar = DrawingCache:Create("Square")
-
-	-- create gradient slices for health bar if configured
-	self.HealthBarSlices = {}
-	local gradientSlices = (self.Config and self.Config.HealthBar and self.Config.HealthBar.Gradient and self.Config.HealthBar.Gradient.Slices) or DefaultConfig.HealthBar.Gradient.Slices
-	for i = 1, gradientSlices do
-		self.HealthBarSlices[i] = DrawingCache:Create("Square")
-	end
-	
-	-- Chams (Highlight)
-	if self.Config.Chams.Enabled then
-		self:CreateHighlight()
-	end
+function TSESP:RemoveESP(player)
+    local e = TSESP._players[player]
+    if e then e:Remove() end
+    TSESP._players[player] = nil
 end
 
-function ESPInstance:CreateHighlight()
-	if not self.Player then return end
-	if not self.Player.Character then return end
-
-	-- create/replace highlight safely
-	if self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
-
-	local ok, highlight = pcall(function()
-		local h = Instance.new("Highlight")
-		h.Name = "TSESP_Highlight_Player"
-		h.Adornee = self.Player.Character
-		h.FillColor = self.Config.Chams.FillColor
-		h.FillTransparency = self.Config.Chams.FillTransparency
-		h.OutlineColor = self.Config.Chams.OutlineColor
-		h.OutlineTransparency = self.Config.Chams.OutlineTransparency
-		-- prefer CoreGui when available; fallback to Workspace
-		local parentOk = pcall(function() h.Parent = game:GetService("CoreGui") end)
-		if not parentOk then
-			h.Parent = Workspace
-		end
-		return h
-	end)
-
-	if ok and highlight then
-		self.Highlight = highlight
-		-- try set DepthMode for improved consistency
-		pcall(function() highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-	else
-		self.Highlight = nil
-	end
+function TSESP:GetESP(player)
+    return TSESP._players[player]
 end
 
-function ESPInstance:UpdateHighlight()
-	if self.Config.Chams.Enabled then
-		if (not self.Highlight) and self.Player and self.Player.Character then
-			self:CreateHighlight()
-		end
-		if self.Highlight then
-			pcall(function()
-				self.Highlight.FillColor = self.Config.Chams.FillColor
-				self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-				self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-				self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-				if self.Highlight.Adornee ~= self.Player.Character then
-					self.Highlight.Adornee = self.Player.Character
-				end
-				-- ensure DepthMode
-				pcall(function() self.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-			end)
-		end
-	elseif self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
+function TSESP:SetGlobalOption(k,v)
+    TSESP.Settings[k] = v
+    for plr,e in pairs(TSESP._players) do e.Settings[k] = v end
 end
 
-function ESPInstance:Update()
-	if self.Updating then return end
-	self.Updating = true
-	
-	local success, err = pcall(function()
-		local config = self.Config
-		local player = self.Player
-		
-		-- Check if ESP should be visible
-		if not config.Enabled then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-		
-		if config.AliveCheck and not Utilities:IsAlive(player) then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-		
-		if config.TeamCheck and player.Team == LocalPlayer.Team then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-		
-		local character = player.Character
-		if not character then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-		
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		
-		if not rootPart then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-		
-		local distance = Utilities:GetDistance(rootPart.Position)
-		if distance > config.MaxDistance then
-			self:SetVisible(false)
-			-- ensure chams are updated/removed even when drawings hidden due to distance
-			self:UpdateHighlight()
-			self.Updating = false
-			return
-		end
-		-- ensure chams are created/kept even if bounding box ends up off-screen
-		self:UpdateHighlight()
-		
-		local boundingBox = Utilities:GetBoundingBox(character)
-		if not boundingBox then
-			self:SetVisible(false)
-			-- keep chams updated when player is off-screen
-			self:UpdateHighlight()
-			self.Updating = false
-			return
-		end
-		
-		-- Update Box
-		if config.Box.Enabled then
-			self:UpdateBox(boundingBox)
-		else
-			self.Drawings.Box.Visible = false
-			self.Drawings.BoxOutline.Visible = false
-		end
-		
-		-- Update Tracer
-		if config.Tracer.Enabled then
-			self:UpdateTracer(rootPart.Position)
-		else
-			self.Drawings.Tracer.Visible = false
-			self.Drawings.TracerOutline.Visible = false
-		end
-		
-		-- Update Name
-		if config.Name.Enabled then
-			self:UpdateName(player, boundingBox, distance, humanoid)
-		else
-			self.Drawings.Name.Visible = false
-		end
-		
-		-- Update Health Bar
-		if config.HealthBar.Enabled and humanoid then
-			self:UpdateHealthBar(boundingBox, humanoid)
-		else
-			self.Drawings.HealthBar.Visible = false
-			self.Drawings.HealthBarOutline.Visible = false
-		end
-		
-		-- Update Chams
-		self:UpdateHighlight()
-	end)
-	
-	if not success then
-		warn("[TSESP] Error updating ESP for " .. tostring(self.Player) .. ": " .. tostring(err))
-	end
-	
-	self.Updating = false
+function TSESP:SetPlayerOption(player,k,v)
+    local e = TSESP._players[player]
+    if e then e.Settings[k] = v end
 end
 
-function ESPInstance:UpdateBox(boundingBox)
-	local config = self.Config.Box
-	
-	-- Outline
-	if config.Outline then
-		self.Drawings.BoxOutline.Visible = true
-		local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
-		local pos = boundingBox.Position
-		local size = boundingBox.Size
-		-- clamp size and position to viewport to avoid invalid drawing values
-		size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
-		pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
-		self.Drawings.BoxOutline.Position = pos - Vector2.new(1, 1)
-		self.Drawings.BoxOutline.Size = size + Vector2.new(2, 2)
-		self.Drawings.BoxOutline.Color = config.OutlineColor
-		self.Drawings.BoxOutline.Thickness = config.Thickness
-		self.Drawings.BoxOutline.Filled = false
-		self.Drawings.BoxOutline.ZIndex = 1
-	else
-		self.Drawings.BoxOutline.Visible = false
-	end
-	
-	-- Main Box
-	self.Drawings.Box.Visible = true
-	local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
-	local pos = boundingBox.Position
-	local size = boundingBox.Size
-	if size.X <= 0 or size.Y <= 0 then
-		self.Drawings.Box.Visible = false
-		return
-	end
-	-- clamp
-	size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
-	pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
-	self.Drawings.Box.Position = pos
-	self.Drawings.Box.Size = size
-	self.Drawings.Box.Color = config.Color
-	self.Drawings.Box.Thickness = config.Thickness
-	self.Drawings.Box.Filled = config.Filled
-	self.Drawings.Box.Transparency = config.Filled and config.FillTransparency or 1
-	self.Drawings.Box.ZIndex = 2
+-- Compatibility Add(opts) for loader-style libraries
+-- Accepts options like in the user's snippet and maps them to TSESP objects.
+function TSESP:Add(opts)
+    if type(opts) ~= "table" then return nil end
+    -- Determine player from Model or Player field
+    local player = nil
+    if opts.Player and typeof(opts.Player) == "Instance" and opts.Player:IsA("Player") then
+        player = opts.Player
+    elseif opts.Model and typeof(opts.Model) == "Instance" then
+        player = Players:GetPlayerFromCharacter(opts.Model) or Players:FindFirstChild(opts.Model.Name)
+    elseif opts.Name and type(opts.Name) == "string" then
+        player = Players:FindFirstChild(opts.Name) or Players:GetPlayers()[opts.Name]
+    end
+
+    if not player then
+        return nil
+    end
+
+    local e = TSESP._players[player] or TSESP:CreateESP(player)
+
+    -- Basic mappings
+    if opts.MaxDistance then e.Settings.MaxDistance = opts.MaxDistance end
+    if opts.Color then e.Settings.Color = opts.Color end
+    if opts.TextSize and e.Drawings.Name then e.Drawings.Name.Size = opts.TextSize end
+    if opts.Name and e.Drawings.Name then e.Drawings.Name.Text = opts.Name end
+
+    -- Box fill / outline
+    if opts.FillColor and e.Drawings.Box then
+        e.Drawings.Box.Filled = true
+        e.Drawings.Box.Color = opts.FillColor
+        if opts.FillTransparency ~= nil then e.Drawings.Box.Transparency = opts.FillTransparency end
+    end
+    if opts.OutlineColor and e.Drawings.Box then
+        e.Drawings.Box.Thickness = e.Drawings.Box.Thickness or (e.Settings.Thickness or 1)
+        -- best-effort: no separate outline drawing by default
+        e.Drawings.Box.Color = opts.OutlineColor
+        if opts.OutlineTransparency ~= nil then e.Drawings.Box.Transparency = opts.OutlineTransparency end
+    end
+
+    -- Tracer mapping
+    if type(opts.Tracer) == "table" then
+        e.Settings.Tracer = opts.Tracer.Enabled ~= false
+        if e.Drawings.Tracer and opts.Tracer.Color then e.Drawings.Tracer.Color = opts.Tracer.Color end
+        if opts.Tracer.From then
+            e.Settings.TracerFrom = opts.Tracer.From
+        end
+    end
+
+    -- Arrow: use an extra Line to approximate
+    if type(opts.Arrow) == "table" and opts.Arrow.Enabled and e.Drawings.Tracer then
+        if not e.Drawings.Arrow then
+            e.Drawings.Arrow = createDrawing("Line")
+        end
+        e.Drawings.Arrow.Color = opts.Arrow.Color or e.Settings.Color
+        e.Drawings.Arrow.Thickness = (opts.Arrow.Thickness or 1)
+    end
+
+    -- Return a handler compatible object
+    local handler = {}
+    function handler:Remove()
+        TSESP:RemoveESP(player)
+    end
+    return handler
 end
 
-function ESPInstance:UpdateTracer(position)
-	local config = self.Config.Tracer
-	
-	local screenPos, onScreen = Utilities:GetScreenPosition(position)
-	if not onScreen then
-		self.Drawings.Tracer.Visible = false
-		self.Drawings.TracerOutline.Visible = false
-		return
-	end
-	
-	local fromPosition
-	local viewportSize = Camera.ViewportSize
-	
-	if config.From == "Top" then
-		fromPosition = Vector2.new(viewportSize.X / 2, 0)
-	elseif config.From == "Center" then
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-	elseif config.From == "Bottom" then
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-	elseif config.From == "Mouse" then
-		local mouse = LocalPlayer:GetMouse()
-		fromPosition = Vector2.new(mouse.X, mouse.Y)
-	else
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-	end
-	
-	-- Outline
-	if config.Outline then
-		self.Drawings.TracerOutline.Visible = true
-		self.Drawings.TracerOutline.From = fromPosition
-		self.Drawings.TracerOutline.To = screenPos
-		self.Drawings.TracerOutline.Color = config.OutlineColor
-		self.Drawings.TracerOutline.Thickness = config.Thickness + 2
-		self.Drawings.TracerOutline.Transparency = config.Transparency
-		self.Drawings.TracerOutline.ZIndex = 1
-	else
-		self.Drawings.TracerOutline.Visible = false
-	end
-	
-	-- Main Tracer
-	self.Drawings.Tracer.Visible = true
-	self.Drawings.Tracer.From = fromPosition
-	self.Drawings.Tracer.To = screenPos
-	self.Drawings.Tracer.Color = config.Color
-	self.Drawings.Tracer.Thickness = config.Thickness
-	self.Drawings.Tracer.Transparency = config.Transparency
-	self.Drawings.Tracer.ZIndex = 2
-end
-
-function ESPInstance:UpdateName(player, boundingBox, distance, humanoid)
-	local config = self.Config.Name
-	
-	local displayText = player.Name
-	
-	if config.DisplayDistance then
-		displayText = displayText .. string.format(" [%.0fm]", distance)
-	end
-	
-	if config.DisplayHealth and humanoid then
-		displayText = displayText .. string.format(" [%d/%d]", math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
-	end
-	
-	self.Drawings.Name.Visible = true
-	self.Drawings.Name.Text = displayText
-	self.Drawings.Name.Color = config.Color
-	self.Drawings.Name.Size = config.Size
-	-- safe font assignment with fallback
-	local ok, f = pcall(function() return config.Font end)
-	if ok and f then
-		pcall(function() self.Drawings.Name.Font = f end)
-	else
-		self.Drawings.Name.Font = Drawing.Fonts.Monospace
-	end
-	self.Drawings.Name.Outline = config.Outline
-	self.Drawings.Name.OutlineColor = config.OutlineColor
-	self.Drawings.Name.Center = true
-	self.Drawings.Name.Position = Vector2.new(
-		boundingBox.Position.X + boundingBox.Size.X / 2,
-		boundingBox.Position.Y - 18
-	)
-	self.Drawings.Name.ZIndex = 3
-end
-
-function ESPInstance:UpdateHealthBar(boundingBox, humanoid)
-	local config = self.Config.HealthBar
-	local healthPercent = humanoid.Health / humanoid.MaxHealth
-	
-	local barWidth, barHeight
-	local barPos
-	
-	if config.Position == "Left" then
-		barWidth = config.Size
-		barHeight = boundingBox.Size.Y
-		barPos = Vector2.new(boundingBox.Position.X - config.Size - 3, boundingBox.Position.Y)
-	elseif config.Position == "Right" then
-		barWidth = config.Size
-		barHeight = boundingBox.Size.Y
-		barPos = Vector2.new(boundingBox.Position.X + boundingBox.Size.X + 3, boundingBox.Position.Y)
-	elseif config.Position == "Top" then
-		barWidth = boundingBox.Size.X
-		barHeight = config.Size
-		barPos = Vector2.new(boundingBox.Position.X, boundingBox.Position.Y - config.Size - 3)
-	elseif config.Position == "Bottom" then
-		barWidth = boundingBox.Size.X
-		barHeight = config.Size
-		barPos = Vector2.new(boundingBox.Position.X, boundingBox.Position.Y + boundingBox.Size.Y + 3)
-	end
-	
-	-- Outline
-	if config.Outline then
-		self.Drawings.HealthBarOutline.Visible = true
-		self.Drawings.HealthBarOutline.Position = barPos - Vector2.new(1, 1)
-		self.Drawings.HealthBarOutline.Size = Vector2.new(barWidth + 2, barHeight + 2)
-		self.Drawings.HealthBarOutline.Color = config.OutlineColor
-		self.Drawings.HealthBarOutline.Filled = true
-		self.Drawings.HealthBarOutline.Transparency = 1
-		self.Drawings.HealthBarOutline.ZIndex = 1
-	else
-		self.Drawings.HealthBarOutline.Visible = false
-	end
-	
-	-- Health Bar
-	local healthColor = config.Color
-
-	local gradientEnabled = config.Gradient and config.Gradient.Enabled
-	local healthColorComputed
-	if not gradientEnabled then
-		if config.LerpColor then
-			healthColorComputed = Utilities:LerpColor(config.LowHealthColor, config.Color, healthPercent)
-		elseif healthPercent < 0.3 then
-			healthColorComputed = config.LowHealthColor
-		else
-			healthColorComputed = config.Color
-		end
-	end
-
-	-- Render gradient using slices if enabled, otherwise use single bar
-	if gradientEnabled and self.HealthBarSlices then
-		self.Drawings.HealthBar.Visible = false
-		local slices = (config.Gradient and config.Gradient.Slices) or DefaultConfig.HealthBar.Gradient.Slices
-		local speed = (config.Gradient and config.Gradient.Speed) or DefaultConfig.HealthBar.Gradient.Speed
-		local filledHeight = barHeight * healthPercent
-
-		for i = 1, slices do
-			local slice = self.HealthBarSlices[i]
-			if not slice then break end
-			if config.Position == "Left" or config.Position == "Right" then
-				local sliceHeight = barHeight / slices
-				local overlap = math.min(1, sliceHeight * 0.25)
-				local topY = barPos.Y + (i - 1) * sliceHeight
-				local available = math.clamp(filledHeight - (barHeight - i * sliceHeight), 0, sliceHeight)
-				if available <= 0 then
-					slice.Visible = false
-				else
-					slice.Visible = true
-					local posY = topY + (sliceHeight - available) - overlap * 0.5
-					slice.Position = Vector2.new(barPos.X, posY)
-					slice.Size = Vector2.new(barWidth, math.clamp(available + overlap, 1, sliceHeight + overlap))
-					local progress = (i - 1) / math.max(1, slices - 1)
-					local offset = (tick() * speed) % 1
-					local samplePos = (progress + offset) % 1
-					slice.Color = Utilities:GetGradientColor(config.Gradient, samplePos)
-					slice.Filled = true
-					slice.Transparency = 1
-					slice.ZIndex = 2
-				end
-			else
-				-- horizontal (Top/Bottom)
-				local sliceWidth = barWidth / slices
-				local overlap = math.min(1, sliceWidth * 0.25)
-				local leftX = barPos.X + (i - 1) * sliceWidth
-				local available = math.clamp(barWidth * healthPercent - (i - 1) * sliceWidth, 0, sliceWidth)
-				if available <= 0 then
-					slice.Visible = false
-				else
-					slice.Visible = true
-					slice.Position = Vector2.new(leftX - overlap * 0.5, barPos.Y)
-					slice.Size = Vector2.new(math.clamp(available + overlap, 1, sliceWidth + overlap), barHeight)
-					local progress = (i - 1) / math.max(1, slices - 1)
-					local offset = (tick() * speed) % 1
-					local samplePos = (progress + offset) % 1
-					slice.Color = Utilities:GetGradientColor(config.Gradient, samplePos)
-					slice.Filled = true
-					slice.Transparency = 1
-					slice.ZIndex = 2
-				end
-			end
-		end
-	else
-		-- hide any slices
-		if self.HealthBarSlices then
-			for _, slice in pairs(self.HealthBarSlices) do
-				slice.Visible = false
-			end
-		end
-		-- legacy single bar
-		local healthBarSize
-		if config.Position == "Left" or config.Position == "Right" then
-			healthBarSize = Vector2.new(barWidth, barHeight * healthPercent)
-			barPos = Vector2.new(barPos.X, barPos.Y + barHeight * (1 - healthPercent))
-		else
-			healthBarSize = Vector2.new(barWidth * healthPercent, barHeight)
-		end
-
-		self.Drawings.HealthBar.Visible = true
-		self.Drawings.HealthBar.Position = barPos
-		self.Drawings.HealthBar.Size = healthBarSize
-		self.Drawings.HealthBar.Color = healthColorComputed or healthColor
-		self.Drawings.HealthBar.Filled = true
-		self.Drawings.HealthBar.Transparency = 1
-		self.Drawings.HealthBar.ZIndex = 2
-	end
-end
-
-function ESPInstance:SetVisible(visible)
-	for _, drawing in pairs(self.Drawings) do
-		if drawing then
-			drawing.Visible = visible
-		end
-	end
-	-- Also toggle any gradient health bar slices (they live outside `self.Drawings`)
-	if self.HealthBarSlices then
-		for _, slice in pairs(self.HealthBarSlices) do
-			if slice then
-				slice.Visible = visible
-			end
-		end
-	end
-
-	-- Highlights are managed separately by UpdateHighlight to allow chams
-	-- to remain visible when player is off-screen; do not toggle here.
-end
-
-function ESPInstance:Remove()
-	for _, drawing in pairs(self.Drawings) do
-		DrawingCache:Remove(drawing)
-	end
-
-	if self.HealthBarSlices then
-		for _, d in pairs(self.HealthBarSlices) do
-			DrawingCache:Remove(d)
-		end
-		self.HealthBarSlices = nil
-	end
-	
-	if self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
-
-	if self._charConn then
-		pcall(function() self._charConn:Disconnect() end)
-		self._charConn = nil
-	end
-
-	self.Drawings = {}
-	self.Highlight = nil
-end
-
--- Part ESP Instance Class
-local PartESPInstance = {}
-PartESPInstance.__index = PartESPInstance
-
-function PartESPInstance.new(part, label, config)
-	local self = setmetatable({}, PartESPInstance)
-
-	self.Part = part
-	self.Label = label or (part and part.Name) or "Part"
-	self.Config = config or DefaultConfig
-	self.Drawings = {}
-	self.Highlight = nil
-	self.Updating = false
-
-	self:CreateDrawings()
-
-	-- monitor part ancestry to recreate highlight if the part is reparented or respawned
-	if self.Part then
-		local ok, conn = pcall(function()
-			return self.Part.AncestryChanged:Connect(function(child, parent)
-				wait(0.05)
-				self:UpdateHighlight()
-			end)
-		end)
-		if ok and conn then
-			self._partConn = conn
-		end
-	end
-
-	return self
-end
-
-function PartESPInstance:CreateDrawings()
-	self.Drawings.Box = DrawingCache:Create("Square")
-	self.Drawings.BoxOutline = DrawingCache:Create("Square")
-	self.Drawings.Tracer = DrawingCache:Create("Line")
-	self.Drawings.TracerOutline = DrawingCache:Create("Line")
-	self.Drawings.Name = DrawingCache:Create("Text")
-
-	if self.Config.Chams.Enabled then
-		self:CreateHighlight()
-	end
-end
-
-function PartESPInstance:CreateHighlight()
-	if not self.Part then return end
-
-	if self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
-
-	local ok, highlight = pcall(function()
-		local h = Instance.new("Highlight")
-		h.Name = "TSESP_Highlight_Part"
-		h.Adornee = self.Part
-		h.FillColor = self.Config.Chams.FillColor
-		h.FillTransparency = self.Config.Chams.FillTransparency
-		h.OutlineColor = self.Config.Chams.OutlineColor
-		h.OutlineTransparency = self.Config.Chams.OutlineTransparency
-		local parentOk = pcall(function() h.Parent = game:GetService("CoreGui") end)
-		if not parentOk then h.Parent = Workspace end
-		return h
-	end)
-
-	if ok and highlight then
-		self.Highlight = highlight
-		pcall(function() highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-	else
-		self.Highlight = nil
-	end
-end
-end
-
-function PartESPInstance:UpdateHighlight()
-	if self.Config.Chams.Enabled then
-		if (not self.Highlight) and self.Part then
-			self:CreateHighlight()
-		end
-		if self.Highlight then
-			pcall(function()
-				self.Highlight.FillColor = self.Config.Chams.FillColor
-				self.Highlight.FillTransparency = self.Config.Chams.FillTransparency
-				self.Highlight.OutlineColor = self.Config.Chams.OutlineColor
-				self.Highlight.OutlineTransparency = self.Config.Chams.OutlineTransparency
-				if self.Highlight.Adornee ~= self.Part then
-					self.Highlight.Adornee = self.Part
-				end
-				pcall(function() self.Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop end)
-			end)
-		end
-	elseif self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
-end
-
-function PartESPInstance:Update()
-	if self.Updating then return end
-	self.Updating = true
-
-	local ok, err = pcall(function()
-		local config = self.Config
-		local part = self.Part
-
-		if not config.Enabled then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-
-		if not part or not part.Parent or not part:IsA("BasePart") then
-			self:SetVisible(false)
-			self.Updating = false
-			return
-		end
-
-		local position = part.Position
-		local distance = Utilities:GetDistance(position)
-		if distance > config.MaxDistance then
-			self:SetVisible(false)
-			self:UpdateHighlight()
-			self.Updating = false
-			return
-		end
-
-		-- ensure part chams are maintained even if bounding box ends up off-screen
-		self:UpdateHighlight()
-
-		local boundingBox = Utilities:GetPartBoundingBox(part)
-		if not boundingBox then
-			self:SetVisible(false)
-			self:UpdateHighlight()
-			self.Updating = false
-			return
-		end
-
-		if config.Box.Enabled then
-			self:UpdateBox(boundingBox)
-		else
-			self.Drawings.Box.Visible = false
-			self.Drawings.BoxOutline.Visible = false
-		end
-
-		if config.Tracer.Enabled then
-			self:UpdateTracer(position)
-		else
-			self.Drawings.Tracer.Visible = false
-			self.Drawings.TracerOutline.Visible = false
-		end
-
-		if config.Name.Enabled then
-			self:UpdateName(boundingBox, distance)
-		else
-			self.Drawings.Name.Visible = false
-		end
-
-		self:UpdateHighlight()
-	end)
-
-	if not ok then
-		warn("[TSESP] Error updating part ESP: " .. tostring(err))
-	end
-
-	self.Updating = false
-end
-
-function PartESPInstance:UpdateBox(boundingBox)
-	local config = self.Config.Box
-
-	if config.Outline then
-		local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
-		local pos = boundingBox.Position
-		local size = boundingBox.Size
-		size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
-		pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
-		self.Drawings.BoxOutline.Visible = true
-		self.Drawings.BoxOutline.Position = pos - Vector2.new(1, 1)
-		self.Drawings.BoxOutline.Size = size + Vector2.new(2, 2)
-		self.Drawings.BoxOutline.Color = config.OutlineColor
-		self.Drawings.BoxOutline.Thickness = config.Thickness
-		self.Drawings.BoxOutline.Filled = false
-		self.Drawings.BoxOutline.ZIndex = 1
-	else
-		self.Drawings.BoxOutline.Visible = false
-	end
-
-	local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
-	local pos = boundingBox.Position
-	local size = boundingBox.Size
-	if size.X <= 0 or size.Y <= 0 then
-		self.Drawings.Box.Visible = false
-		return
-	end
-	size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
-	pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
-	self.Drawings.Box.Visible = true
-	self.Drawings.Box.Position = pos
-	self.Drawings.Box.Size = size
-	self.Drawings.Box.Color = config.Color
-	self.Drawings.Box.Thickness = config.Thickness
-	self.Drawings.Box.Filled = config.Filled
-	self.Drawings.Box.Transparency = config.Filled and config.FillTransparency or 1
-	self.Drawings.Box.ZIndex = 2
-end
-
-function PartESPInstance:UpdateTracer(position)
-	local config = self.Config.Tracer
-
-	local screenPos, onScreen = Utilities:GetScreenPosition(position)
-	if not onScreen then
-		self.Drawings.Tracer.Visible = false
-		self.Drawings.TracerOutline.Visible = false
-		return
-	end
-
-	local fromPosition
-	local viewportSize = Camera.ViewportSize
-
-	if config.From == "Top" then
-		fromPosition = Vector2.new(viewportSize.X / 2, 0)
-	elseif config.From == "Center" then
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-	elseif config.From == "Bottom" then
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-	elseif config.From == "Mouse" then
-		local mouse = LocalPlayer:GetMouse()
-		fromPosition = Vector2.new(mouse.X, mouse.Y)
-	else
-		fromPosition = Vector2.new(viewportSize.X / 2, viewportSize.Y)
-	end
-
-	if config.Outline then
-		self.Drawings.TracerOutline.Visible = true
-		self.Drawings.TracerOutline.From = fromPosition
-		self.Drawings.TracerOutline.To = screenPos
-		self.Drawings.TracerOutline.Color = config.OutlineColor
-		self.Drawings.TracerOutline.Thickness = config.Thickness + 2
-		self.Drawings.TracerOutline.Transparency = config.Transparency
-		self.Drawings.TracerOutline.ZIndex = 1
-	else
-		self.Drawings.TracerOutline.Visible = false
-	end
-
-	self.Drawings.Tracer.Visible = true
-	self.Drawings.Tracer.From = fromPosition
-	self.Drawings.Tracer.To = screenPos
-	self.Drawings.Tracer.Color = config.Color
-	self.Drawings.Tracer.Thickness = config.Thickness
-	self.Drawings.Tracer.Transparency = config.Transparency
-	self.Drawings.Tracer.ZIndex = 2
-end
-
-function PartESPInstance:UpdateName(boundingBox, distance)
-	local config = self.Config.Name
-	local displayText = self.Label
-
-	if config.DisplayDistance then
-		displayText = displayText .. string.format(" [%.0fm]", distance)
-	end
-
-	self.Drawings.Name.Visible = true
-	self.Drawings.Name.Text = displayText
-	self.Drawings.Name.Color = config.Color
-	self.Drawings.Name.Size = config.Size
-	local ok, f = pcall(function() return config.Font end)
-	if ok and f then
-		pcall(function() self.Drawings.Name.Font = f end)
-	else
-		self.Drawings.Name.Font = Drawing.Fonts.Monospace
-	end
-	self.Drawings.Name.Outline = config.Outline
-	self.Drawings.Name.OutlineColor = config.OutlineColor
-	self.Drawings.Name.Center = true
-	self.Drawings.Name.Position = Vector2.new(
-		boundingBox.Position.X + boundingBox.Size.X / 2,
-		boundingBox.Position.Y - 18
-	)
-	self.Drawings.Name.ZIndex = 3
-end
-
-function PartESPInstance:SetVisible(visible)
-	for _, drawing in pairs(self.Drawings) do
-		if drawing then
-			drawing.Visible = visible
-		end
-	end
-
-	if self.Highlight then
-		self.Highlight.Enabled = visible
-	end
-end
-
-function PartESPInstance:Remove()
-	for _, drawing in pairs(self.Drawings) do
-		DrawingCache:Remove(drawing)
-	end
-
-	if self.Highlight then
-		pcall(function() self.Highlight:Destroy() end)
-		self.Highlight = nil
-	end
-
-	if self._partConn then
-		pcall(function() self._partConn:Disconnect() end)
-		self._partConn = nil
-	end
-
-	self.Drawings = {}
-	self.Highlight = nil
-end
-
--- Main TSESP Functions
-function TSESP:AddPlayer(player, customConfig)
-	if self._instances[player] then
-		return
-	end
-	
-	local config = customConfig or self:DeepCopy(DefaultConfig)
-	local instance = ESPInstance.new(player, config)
-	self._instances[player] = instance
-	
-	return instance
-end
-
-function TSESP:RemovePlayer(player)
-	local instance = self._instances[player]
-	if instance then
-		instance:Remove()
-		self._instances[player] = nil
-	end
-end
-
-function TSESP:GetPlayer(player)
-	return self._instances[player]
-end
-
-function TSESP:AddAllPlayers()
-	for _, player in ipairs(Players:GetPlayers()) do
-		if player ~= LocalPlayer then
-			self:AddPlayer(player)
-		end
-	end
-end
-
-function TSESP:AddPart(part, label, customConfig)
-	if not part or not part:IsA("BasePart") then
-		return
-	end
-
-	if self._partInstances[part] then
-		return
-	end
-
-	local config = customConfig or self:DeepCopy(DefaultConfig)
-	local instance = PartESPInstance.new(part, label, config)
-	self._partInstances[part] = instance
-
-	return instance
-end
-
-function TSESP:RemovePart(part)
-	local instance = self._partInstances[part]
-	if instance then
-		instance:Remove()
-		self._partInstances[part] = nil
-	end
-end
-
-function TSESP:GetPart(part)
-	return self._partInstances[part]
-end
-
-function TSESP:RemoveAllPlayers()
-	for player, _ in pairs(self._instances) do
-		self:RemovePlayer(player)
-	end
-end
-
-function TSESP:RemoveAllParts()
-	for part, _ in pairs(self._partInstances) do
-		self:RemovePart(part)
-	end
-end
-
-function TSESP:UpdateConfig(player, newConfig)
-	local instance = self._instances[player]
-	if instance then
-		for key, value in pairs(newConfig) do
-			if type(value) == "table" then
-				for subKey, subValue in pairs(value) do
-					instance.Config[key][subKey] = subValue
-				end
-			else
-				instance.Config[key] = value
-			end
-		end
-	end
-end
-
-function TSESP:UpdateAllConfigs(newConfig)
-	for player, _ in pairs(self._instances) do
-		self:UpdateConfig(player, newConfig)
-	end
-
-	for part, _ in pairs(self._partInstances) do
-		local instance = self._partInstances[part]
-		if instance then
-			for key, value in pairs(newConfig) do
-				if type(value) == "table" then
-					for subKey, subValue in pairs(value) do
-						instance.Config[key][subKey] = subValue
-					end
-				else
-					instance.Config[key] = value
-				end
-			end
-		end
-	end
-end
-
-function TSESP:SetDefaultConfig(config)
-	DefaultConfig = self:DeepCopy(config)
-end
-
-function TSESP:GetDefaultConfig()
-	return self:DeepCopy(DefaultConfig)
-end
-
-function TSESP:DeepCopy(original)
-	local copy = {}
-	for k, v in pairs(original) do
-		if type(v) == "table" then
-			copy[k] = self:DeepCopy(v)
-		else
-			copy[k] = v
-		end
-	end
-	return copy
-end
-
-function TSESP:Enable()
-	if self._renderStep then return end
-	
-	self._renderStep = RunService.RenderStepped:Connect(function()
-		for _, instance in pairs(self._instances) do
-			instance:Update()
-		end
-
-		for _, instance in pairs(self._partInstances) do
-			instance:Update()
-		end
-	end)
-	
-	-- Player added/removed
-	self._connections.PlayerAdded = Players.PlayerAdded:Connect(function(player)
-		if player ~= LocalPlayer then
-			self:AddPlayer(player)
-		end
-	end)
-	
-	self._connections.PlayerRemoving = Players.PlayerRemoving:Connect(function(player)
-		self:RemovePlayer(player)
-	end)
-end
-
-function TSESP:Disable()
-	if self._renderStep then
-		self._renderStep:Disconnect()
-		self._renderStep = nil
-	end
-	
-	for _, connection in pairs(self._connections) do
-		connection:Disconnect()
-	end
-	self._connections = {}
-	
-	for _, instance in pairs(self._instances) do
-		instance:SetVisible(false)
-	end
-
-	for _, instance in pairs(self._partInstances) do
-		instance:SetVisible(false)
-	end
+function TSESP:Toggle(val)
+    TSESP.Settings.Enabled = val and true or false
 end
 
 function TSESP:Destroy()
-	self:Disable()
-	self:RemoveAllPlayers()
-	self:RemoveAllParts()
+    for p,e in pairs(TSESP._players) do pcall(function() e:Remove() end) end
+    TSESP._players = {}
+    if TSESP._conn then pcall(function() TSESP._conn:Disconnect() end) end
+    TSESP._conn = nil
 end
 
--- Auto-initialization
-function TSESP:Init(autoAdd)
-	self:Enable()
-	if autoAdd ~= false then
-		self:AddAllPlayers()
-	end
-	return self
+-- Update loop
+TSESP._conn = RunService.RenderStepped:Connect(function()
+    if not TSESP.Settings.Enabled then
+        return
+    end
+    for p,e in pairs(TSESP._players) do
+        pcall(function() updateESPObject(e) end)
+    end
+end)
+
+-- Auto attach existing players (except local player)
+for _,plr in pairs(Players:GetPlayers()) do
+    if plr ~= Players.LocalPlayer then
+        TSESP._players[plr] = makeESPForPlayer(plr, nil)
+    end
 end
 
--- Export
+Players.PlayerAdded:Connect(function(plr)
+    if plr ~= Players.LocalPlayer then
+        TSESP._players[plr] = makeESPForPlayer(plr, nil)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    local e = TSESP._players[plr]
+    if e then e:Remove() end
+    TSESP._players[plr] = nil
+end)
+
+return TSESP
+-- TSESP - Lightweight ESP Library for executors (Luau)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
+local Camera = Workspace.CurrentCamera
+
+local Drawing = Drawing
+
+local TSESP = {}
+TSESP.__index = TSESP
+
+TSESP.Settings = {
+    Enabled = true,
+    Box = true,
+    Name = true,
+    Tracer = true,
+    Healthbar = true,
+    TeamColor = true,
+    VisibleCheck = true,
+    MaxDistance = 1000,
+    Thickness = 1,
+    Font = 2,
+    Outline = true,
+    Color = Color3.fromRGB(255,255,255),
+    TracerFrom = "Bottom", -- "Bottom" | "Top" | "Center"
+}
+
+TSESP._players = {}
+
+local function isDrawingAvailable()
+    return type(Drawing) == "table" or type(Drawing) == "function"
+end
+
+local function safeWorldToViewport(pos)
+    if not Camera or not Camera.WorldToViewportPoint then
+        return Vector2.new(0,0), 0, false
+    end
+    local x,y,z = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(x,y), z, z > 0
+end
+
+local function createDrawing(kind)
+    if not isDrawingAvailable() then return nil end
+    local ok, obj = pcall(function() return Drawing.new(kind) end)
+    if not ok then return nil end
+    return obj
+end
+
+local function getCharacterRoot(character)
+    return character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("LowerTorso") or character:FindFirstChild("Torso")
+end
+
+local function getHumanoid(character)
+    return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+local function raycastVisible(from, to, ignoreList)
+    if not Workspace.Raycast then return true end
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = ignoreList or {}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    local dir = to - from
+    local result = Workspace:Raycast(from, dir, params)
+    return result == nil
+end
+
+local function makeESPForPlayer(player, settings)
+    local obj = {}
+    obj.Player = player
+    obj.Settings = settings or {}
+    obj.Enabled = true
+    obj.Drawings = {}
+
+    if isDrawingAvailable() then
+        obj.Drawings.Box = createDrawing("Square")
+        obj.Drawings.Tracer = createDrawing("Line")
+        obj.Drawings.Name = createDrawing("Text")
+        obj.Drawings.HealthBack = createDrawing("Square")
+        obj.Drawings.HealthFront = createDrawing("Square")
+    end
+
+    function obj:SetEnabled(val)
+        self.Enabled = val and true or false
+        for _,v in pairs(self.Drawings) do if v and v.Visible ~= nil then v.Visible = self.Enabled end end
+    end
+
+    function obj:SetOption(k,v)
+        self.Settings[k] = v
+    end
+
+    function obj:Remove()
+        for _,v in pairs(self.Drawings) do
+            if v and type(v.Remove) == "function" then
+                pcall(function() v:Remove() end)
+            end
+        end
+        self.Drawings = {}
+        self.Enabled = false
+    end
+
+    return obj
+end
+
+local function updateESPObject(eobj)
+    local plr = eobj.Player
+    local settings = eobj.Settings
+    local char = plr and plr.Character
+    if not plr or not char then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local root = getCharacterRoot(char)
+    local head = char:FindFirstChild("Head")
+    local humanoid = getHumanoid(char)
+    if not root or not head then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local camPos = Camera and Camera.CFrame and Camera.CFrame.Position or Workspace.CurrentCamera.CFrame.Position
+    local headPos = head.Position
+    local rootPos = root.Position
+
+    local headScreen, headZ, headOnScreen = safeWorldToViewport(headPos)
+    local rootScreen, rootZ, rootOnScreen = safeWorldToViewport(rootPos)
+
+    local dist = (camPos - rootPos).Magnitude
+    if dist > (settings.MaxDistance or TSESP.Settings.MaxDistance) then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local visible = true
+    if settings.VisibleCheck ~= false and TSESP.Settings.VisibleCheck then
+        visible = raycastVisible(camPos, headPos, {char})
+    end
+
+    local color = settings.Color or TSESP.Settings.Color
+    if settings.TeamColor and plr.Team and plr.TeamColor then
+        color = plr.TeamColor.Color
+    end
+
+    local onScreen = headOnScreen and rootOnScreen
+    if not onScreen or not visible then
+        for _,v in pairs(eobj.Drawings) do if v and v.Visible ~= nil then v.Visible = false end end
+        return
+    end
+
+    local height = math.abs(headScreen.Y - rootScreen.Y)
+    local width = math.max(10, height * 0.5)
+    local boxPos = Vector2.new(rootScreen.X - width/2, rootScreen.Y - height/2)
+
+    -- Box
+    if eobj.Drawings.Box and (settings.Box or TSESP.Settings.Box) then
+        local box = eobj.Drawings.Box
+        box.Size = Vector2.new(width, height)
+        box.Position = Vector2.new(rootScreen.X - width/2, rootScreen.Y - height/2)
+        box.Thickness = settings.Thickness or TSESP.Settings.Thickness
+        box.Color = color
+        box.Filled = false
+        box.Visible = true
+    elseif eobj.Drawings.Box then eobj.Drawings.Box.Visible = false end
+
+    -- Name
+    if eobj.Drawings.Name and (settings.Name or TSESP.Settings.Name) then
+        local txt = eobj.Drawings.Name
+        local nameText = plr.Name
+        if settings.Distance or TSESP.Settings.Distance then
+            nameText = nameText .. " (" .. tostring(math.floor(dist)) .. "m)"
+        end
+        txt.Text = nameText
+        txt.Size = 16
+        txt.Font = (settings.Font or TSESP.Settings.Font)
+        txt.Position = Vector2.new(headScreen.X, headScreen.Y - (height/2) - 18)
+        txt.Color = color
+        txt.Center = true
+        txt.Outline = TSESP.Settings.Outline
+        txt.Visible = true
+    elseif eobj.Drawings.Name then eobj.Drawings.Name.Visible = false end
+
+    -- Tracer
+    if eobj.Drawings.Tracer and (settings.Tracer or TSESP.Settings.Tracer) then
+        local tri = eobj.Drawings.Tracer
+        local from = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y)
+        if (settings.TracerFrom or TSESP.Settings.TracerFrom) == "Top" then
+            from = Vector2.new(Camera.ViewportSize.X/2, 0)
+        elseif (settings.TracerFrom or TSESP.Settings.TracerFrom) == "Center" then
+            from = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+        end
+        tri.From = from
+        tri.To = headScreen
+        tri.Color = color
+        tri.Thickness = settings.Thickness or TSESP.Settings.Thickness
+        tri.Visible = true
+    elseif eobj.Drawings.Tracer then eobj.Drawings.Tracer.Visible = false end
+
+    -- Healthbar (simple vertical bar at left of box)
+    if eobj.Drawings.HealthBack and eobj.Drawings.HealthFront and (settings.Healthbar or TSESP.Settings.Healthbar) then
+        local back = eobj.Drawings.HealthBack
+        local front = eobj.Drawings.HealthFront
+        local hum = humanoid
+        local maxHp = hum and hum.MaxHealth or 100
+        local hp = hum and hum.Health or maxHp
+        local pct = math.clamp(hp / maxHp, 0, 1)
+
+        local barWidth = math.max(4, width * 0.08)
+        local barHeight = height
+        back.Size = Vector2.new(barWidth, barHeight)
+        back.Position = Vector2.new(rootScreen.X - width/2 - barWidth - 4, rootScreen.Y - height/2)
+        back.Color = Color3.fromRGB(40,40,40)
+        back.Filled = true
+        back.Visible = true
+
+        front.Size = Vector2.new(barWidth - 1, barHeight * pct)
+        front.Position = Vector2.new(back.Position.X + 1, back.Position.Y + (barHeight * (1 - pct)))
+        front.Color = Color3.new(1 - (1-pct), pct, 0)
+        front.Filled = true
+        front.Visible = true
+    elseif eobj.Drawings.HealthBack then eobj.Drawings.HealthBack.Visible = false; eobj.Drawings.HealthFront.Visible = false end
+end
+
+-- Public API
+function TSESP:CreateESP(player, opts)
+    if not player then return nil end
+    local settings = {}
+    for k,v in pairs(TSESP.Settings) do settings[k] = v end
+    if type(opts) == "table" then for k,v in pairs(opts) do settings[k] = v end end
+
+    local eobj = makeESPForPlayer(player, settings)
+    TSESP._players[player] = eobj
+    return eobj
+end
+
+function TSESP:RemoveESP(player)
+    local e = TSESP._players[player]
+    if e then e:Remove() end
+    TSESP._players[player] = nil
+end
+
+function TSESP:GetESP(player)
+    return TSESP._players[player]
+end
+
+function TSESP:SetGlobalOption(k,v)
+    TSESP.Settings[k] = v
+    for plr,e in pairs(TSESP._players) do e.Settings[k] = v end
+end
+
+function TSESP:SetPlayerOption(player,k,v)
+    local e = TSESP._players[player]
+    if e then e.Settings[k] = v end
+end
+
+function TSESP:Toggle(val)
+    TSESP.Settings.Enabled = val and true or false
+end
+
+function TSESP:Destroy()
+    for p,e in pairs(TSESP._players) do pcall(function() e:Remove() end) end
+    TSESP._players = {}
+    if TSESP._conn then pcall(function() TSESP._conn:Disconnect() end) end
+    TSESP._conn = nil
+end
+
+-- Update loop
+TSESP._conn = RunService.RenderStepped:Connect(function()
+    if not TSESP.Settings.Enabled then
+        return
+    end
+    for p,e in pairs(TSESP._players) do
+        pcall(function() updateESPObject(e) end)
+    end
+end)
+
+-- Auto attach existing players (except local player)
+for _,plr in pairs(Players:GetPlayers()) do
+    if plr ~= Players.LocalPlayer then
+        TSESP._players[plr] = makeESPForPlayer(plr, nil)
+    end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    if plr ~= Players.LocalPlayer then
+        TSESP._players[plr] = makeESPForPlayer(plr, nil)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    local e = TSESP._players[plr]
+    if e then e:Remove() end
+    TSESP._players[plr] = nil
+end)
+
 return TSESP
