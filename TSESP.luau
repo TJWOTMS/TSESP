@@ -1,5 +1,5 @@
 --[[
-	TrisSploit ESP Library
+	TrisSplpit ESP Library
 ]]
 
 local TSESP = {
@@ -191,11 +191,13 @@ function Utilities:GetBoundingBox(character)
 		for _, corner in ipairs(corners) do
 			local worldPos = part.CFrame:PointToWorldSpace(corner)
 			local screenPos, onScreen = self:GetScreenPosition(worldPos)
-			if onScreen then anyVisible = true end
-			minX = math.min(minX, screenPos.X)
-			maxX = math.max(maxX, screenPos.X)
-			minY = math.min(minY, screenPos.Y)
-			maxY = math.max(maxY, screenPos.Y)
+			if onScreen then
+				anyVisible = true
+				minX = math.min(minX, screenPos.X)
+				maxX = math.max(maxX, screenPos.X)
+				minY = math.min(minY, screenPos.Y)
+				maxY = math.max(maxY, screenPos.Y)
+			end
 		end
 	end
 
@@ -230,11 +232,11 @@ function Utilities:GetPartBoundingBox(part)
 		local screenPos, onScreen = self:GetScreenPosition(worldPos)
 		if onScreen then
 			anyVisible = true
+			minX = math.min(minX, screenPos.X)
+			maxX = math.max(maxX, screenPos.X)
+			minY = math.min(minY, screenPos.Y)
+			maxY = math.max(maxY, screenPos.Y)
 		end
-		minX = math.min(minX, screenPos.X)
-		maxX = math.max(maxX, screenPos.X)
-		minY = math.min(minY, screenPos.Y)
-		maxY = math.max(maxY, screenPos.Y)
 	end
 
 	if not anyVisible then
@@ -486,8 +488,14 @@ function ESPInstance:UpdateBox(boundingBox)
 	-- Outline
 	if config.Outline then
 		self.Drawings.BoxOutline.Visible = true
-		self.Drawings.BoxOutline.Position = boundingBox.Position - Vector2.new(1, 1)
-		self.Drawings.BoxOutline.Size = boundingBox.Size + Vector2.new(2, 2)
+		local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
+		local pos = boundingBox.Position
+		local size = boundingBox.Size
+		-- clamp size and position to viewport to avoid invalid drawing values
+		size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
+		pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
+		self.Drawings.BoxOutline.Position = pos - Vector2.new(1, 1)
+		self.Drawings.BoxOutline.Size = size + Vector2.new(2, 2)
 		self.Drawings.BoxOutline.Color = config.OutlineColor
 		self.Drawings.BoxOutline.Thickness = config.Thickness
 		self.Drawings.BoxOutline.Filled = false
@@ -498,8 +506,18 @@ function ESPInstance:UpdateBox(boundingBox)
 	
 	-- Main Box
 	self.Drawings.Box.Visible = true
-	self.Drawings.Box.Position = boundingBox.Position
-	self.Drawings.Box.Size = boundingBox.Size
+	local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
+	local pos = boundingBox.Position
+	local size = boundingBox.Size
+	if size.X <= 0 or size.Y <= 0 then
+		self.Drawings.Box.Visible = false
+		return
+	end
+	-- clamp
+	size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
+	pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
+	self.Drawings.Box.Position = pos
+	self.Drawings.Box.Size = size
 	self.Drawings.Box.Color = config.Color
 	self.Drawings.Box.Thickness = config.Thickness
 	self.Drawings.Box.Filled = config.Filled
@@ -882,9 +900,14 @@ function PartESPInstance:UpdateBox(boundingBox)
 	local config = self.Config.Box
 
 	if config.Outline then
+		local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
+		local pos = boundingBox.Position
+		local size = boundingBox.Size
+		size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
+		pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
 		self.Drawings.BoxOutline.Visible = true
-		self.Drawings.BoxOutline.Position = boundingBox.Position - Vector2.new(1, 1)
-		self.Drawings.BoxOutline.Size = boundingBox.Size + Vector2.new(2, 2)
+		self.Drawings.BoxOutline.Position = pos - Vector2.new(1, 1)
+		self.Drawings.BoxOutline.Size = size + Vector2.new(2, 2)
 		self.Drawings.BoxOutline.Color = config.OutlineColor
 		self.Drawings.BoxOutline.Thickness = config.Thickness
 		self.Drawings.BoxOutline.Filled = false
@@ -893,9 +916,18 @@ function PartESPInstance:UpdateBox(boundingBox)
 		self.Drawings.BoxOutline.Visible = false
 	end
 
+	local vp = Camera and Camera.ViewportSize or Vector2.new(1920,1080)
+	local pos = boundingBox.Position
+	local size = boundingBox.Size
+	if size.X <= 0 or size.Y <= 0 then
+		self.Drawings.Box.Visible = false
+		return
+	end
+	size = Vector2.new(math.clamp(size.X, 1, vp.X), math.clamp(size.Y, 1, vp.Y))
+	pos = Vector2.new(math.clamp(pos.X, 0, vp.X - size.X), math.clamp(pos.Y, 0, vp.Y - size.Y))
 	self.Drawings.Box.Visible = true
-	self.Drawings.Box.Position = boundingBox.Position
-	self.Drawings.Box.Size = boundingBox.Size
+	self.Drawings.Box.Position = pos
+	self.Drawings.Box.Size = size
 	self.Drawings.Box.Color = config.Color
 	self.Drawings.Box.Thickness = config.Thickness
 	self.Drawings.Box.Filled = config.Filled
