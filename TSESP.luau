@@ -17,7 +17,7 @@
                        \ \  \_|/_\ \_____  \ \   ____\     \ \  \    \ \  \ \   __  \ \   _  _\ \   __  \ \   _  _\   \ \    / /
                         \ \  \_|\ \|____|\  \ \  \___|      \ \  \____\ \  \ \  \|\  \ \  \\  \\ \  \ \  \ \  \\  \|   \/  /  /
                          \ \_______\____\_\  \ \__\          \ \_______\ \__\ \_______\ \__\\ _\\ \__\ \__\ \__\\ _\ __/  / /
-                          \|_______|\_________\|__|           \|_______|\|__|\|_______|\|__|\|__|\|__|\|__|\|__|\|__|\___/ /
+                          \|_______|\_________\|__|           \|_______|\|_______|\|_______|\|__|\|__|\|__|\|__|\|___| /
                                    \|_________|                                                                     \|___|/
 
 ]]
@@ -447,7 +447,7 @@ function ESP:UpdateESP(data)
     -- Update box outline (full box outline should be behind main box)
     if data.Drawings.BoxOutline then
         local outline = data.Drawings.BoxOutline
-        local outlineTh = options.BoxOutlineThickness or 1
+        local outlineTh = math.clamp((options.BoxOutlineThickness or 1) * scale, 1, options.MaxBoxOutlineThickness or 6)
         -- make outline slightly larger than box so it frames it
         local outlineSize = bbox.Size + Vector2.new(outlineTh * 2, outlineTh * 2)
         outline.Size = outlineSize
@@ -465,7 +465,7 @@ function ESP:UpdateESP(data)
             local pos = bbox.Position - bbox.Size / 2
                 local size = bbox.Size
                 local cornerSize = math.min(size.X, size.Y) / 4
-                local outlineThickness = (options.CornerOutlineThickness or 4) * scale
+                local outlineThickness = math.clamp((options.CornerOutlineThickness or 4) * scale, 1, options.MaxCornerOutlineThickness or 8)
             -- top left
             outlineLines[1].From = pos
             outlineLines[1].To = pos + Vector2.new(cornerSize, 0)
@@ -486,12 +486,12 @@ function ESP:UpdateESP(data)
             outlineLines[7].To = pos + size - Vector2.new(cornerSize, 0)
             outlineLines[8].From = pos + size
             outlineLines[8].To = pos + size - Vector2.new(0, cornerSize)
-            for _, l in pairs(outlineLines) do l.Thickness = math.clamp(outlineThickness, 1, options.MaxCornerOutlineThickness or 8); l.Color = Color3.new(0,0,0); l.Visible = isVisible end
+            for _, l in pairs(outlineLines) do l.Thickness = outlineThickness; l.Color = Color3.new(0,0,0); l.Visible = isVisible end
         end
         local pos = bbox.Position - bbox.Size / 2
         local size = bbox.Size
         local cornerSize = math.min(size.X, size.Y) / 4
-        local mainThickness = (options.CornerThickness or 2) * scale
+        local mainThickness = math.clamp((options.CornerThickness or 2) * scale, 1, options.MaxCornerThickness or 6)
         -- top left
         lines[1].From = pos
         lines[1].To = pos + Vector2.new(cornerSize, 0)
@@ -512,7 +512,7 @@ function ESP:UpdateESP(data)
         lines[7].To = pos + size - Vector2.new(cornerSize, 0)
         lines[8].From = pos + size
         lines[8].To = pos + size - Vector2.new(0, cornerSize)
-        for _, l in pairs(lines) do l.Thickness = math.clamp(mainThickness, 1, options.MaxCornerThickness or 6); l.Color = currentColor; l.Visible = isVisible end
+        for _, l in pairs(lines) do l.Thickness = mainThickness; l.Color = currentColor; l.Visible = isVisible end
     end
 
     -- Update tracer
@@ -611,15 +611,8 @@ function ESP:UpdateESP(data)
             if options.ShrinkHealthbar then
                 barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
             end
-            if data.Drawings.HealthbarOutline then
-                -- keep outline thin and fixed so gradient/fill doesn't overflow it
-                local outlineTh = options.HealthbarOutlineThickness or 1
-                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(1, 0)
-                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2, barHeight + 1)
-                data.Drawings.HealthbarOutline.Color = Color3.new(0,0,0)
-                data.Drawings.HealthbarOutline.Thickness = outlineTh
-                data.Drawings.HealthbarOutline.Visible = isVisible
-            end
+            local outlineTh = options.HealthbarOutlineThickness or 1
+            local inset = math.max(2, outlineTh + 1)  -- Ensure fills don't touch outline
             if data.Drawings.HealthFillSegments then
                 local segments = data.Drawings.HealthFillSegments
                 local numSegments = #segments
@@ -628,7 +621,6 @@ function ESP:UpdateESP(data)
                     local fill = segments[i]
                     local yOffset = (i-1) * heightPerSegment
                     -- inset fills to stay clearly inside the outline
-                    local inset = options.HealthbarInset or 2
                     local fillWidth = math.max(1, barWidth - inset * 2)
                     -- compute fractional visibility for partial segment handling
                     -- align fills to bottom so gradient grows from bottom up and doesn't overflow outline
@@ -661,6 +653,14 @@ function ESP:UpdateESP(data)
                         fill.Visible = false
                     end
                 end
+            end
+            if data.Drawings.HealthbarOutline then
+                -- keep outline thin and fixed so gradient/fill doesn't overflow it
+                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(outlineTh, outlineTh)
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2*outlineTh, barHeight + 2*outlineTh)
+                data.Drawings.HealthbarOutline.Color = Color3.new(0,0,0)
+                data.Drawings.HealthbarOutline.Thickness = outlineTh
+                data.Drawings.HealthbarOutline.Visible = isVisible
             end
             -- set health text next to bar now that barPos/barWidth computed
             if data.Drawings.Texts and data.Drawings.Texts.health then
