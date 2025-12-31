@@ -347,7 +347,7 @@ function ESP:UpdateESP(data)
     if data.Drawings.Box then
         data.Drawings.Box.Position = bbox.Position - bbox.Size / 2
         data.Drawings.Box.Size = bbox.Size
-        data.Drawings.Box.Thickness = 2  -- Thicker outline
+        data.Drawings.Box.Thickness = 3 
         data.Drawings.Box.Visible = isVisible
     end
 
@@ -480,7 +480,7 @@ function ESP:UpdateESP(data)
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
-            local barWidth = math.max(2, bbox.Size.Y * 0.03)  -- Scale with distance, min 2
+            local barWidth = math.max(1, bbox.Size.Y * 0.015)  -- Thinner healthbar
             local baseBarHeight = bbox.Size.Y
             local barHeight = options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 2, 0)
@@ -489,7 +489,7 @@ function ESP:UpdateESP(data)
             end
             if data.Drawings.HealthbarOutline then
                 data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(1, 1)
-                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2, baseBarHeight + 2)
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2, barHeight + 2)  -- Match bar height
                 data.Drawings.HealthbarOutline.Visible = isVisible
             end
             if data.Drawings.HealthFillSegments then
