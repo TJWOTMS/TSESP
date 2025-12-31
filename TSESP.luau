@@ -191,12 +191,15 @@ function ESP:Add(target: Instance, options: table?)
         background.Visible = isVisible
         espData.Drawings.HealthBackground = background
 
-        local fill = Drawing.new("Square")
-        fill.Color = color
-        fill.Thickness = 1
-        fill.Filled = true
-        fill.Visible = isVisible
-        espData.Drawings.HealthFill = fill
+        local segments = {}
+        local numSegments = 10
+        for i = 1, numSegments do
+            local fill = Drawing.new("Square")
+            fill.Filled = true
+            fill.Visible = isVisible
+            table.insert(segments, fill)
+        end
+        espData.Drawings.HealthFillSegments = segments
     end
 
     activeESPs[target] = espData
@@ -206,7 +209,7 @@ function ESP:Add(target: Instance, options: table?)
         local RunService = game:GetService("RunService")
         renderConnection = RunService.RenderStepped:Connect(function()
             for _, data in pairs(activeESPs) do
-                ESP:UpdateESP(data)
+                pcall(function() ESP:UpdateESP(data) end)
             end
         end)
     end
@@ -234,6 +237,13 @@ function ESP:UpdateESP(data)
         end
         if data.Highlight then data.Highlight.Enabled = false end
         return
+    end
+
+    -- Reparent highlight if necessary
+    if data.Highlight then
+        if data.Highlight.Parent ~= model then
+            data.Highlight.Parent = model
+        end
     end
 
     local camera = workspace.CurrentCamera
@@ -302,7 +312,7 @@ function ESP:UpdateESP(data)
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
         if data.Drawings.Text then data.Drawings.Text.Visible = false end
         if data.Drawings.HealthBackground then data.Drawings.HealthBackground.Visible = false end
-        if data.Drawings.HealthFill then data.Drawings.HealthFill.Visible = false end
+        if data.Drawings.HealthFillSegments then for _, d in pairs(data.Drawings.HealthFillSegments) do d.Visible = false end end
         return
     end
 
@@ -437,7 +447,7 @@ function ESP:UpdateESP(data)
     end
 
     -- Update healthbar
-    if data.Drawings.HealthBackground or data.Drawings.HealthFill then
+    if data.Drawings.HealthBackground or data.Drawings.HealthFillSegments then
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
@@ -449,26 +459,42 @@ function ESP:UpdateESP(data)
                 data.Drawings.HealthBackground.Size = Vector2.new(barWidth, barHeight)
                 data.Drawings.HealthBackground.Visible = isVisible
             end
-            if data.Drawings.HealthFill then
-                local fillHeight = barHeight * healthPercent
-                data.Drawings.HealthFill.Position = barPos + Vector2.new(0, barHeight - fillHeight)
-                data.Drawings.HealthFill.Size = Vector2.new(barWidth, fillHeight)
-                if options.HealthbarGradient then
-                    local t = tick() * options.GradientSpeed % 1
-                    local num = #options.GradientColors
-                    local index = math.floor(t * num) + 1
-                    local nextIndex = index % num + 1
-                    local frac = (t * num) % 1
-                    local color = options.GradientColors[index]:Lerp(options.GradientColors[nextIndex], frac)
-                    data.Drawings.HealthFill.Color = color
-                else
-                    data.Drawings.HealthFill.Color = options.Color or Color3.new(1,1,1)
+            if data.Drawings.HealthFillSegments then
+                local segments = data.Drawings.HealthFillSegments
+                local numSegments = #segments
+                local heightPerSegment = barHeight / numSegments
+                for i = 1, numSegments do
+                    local fill = segments[i]
+                    local yOffset = (i-1) * heightPerSegment
+                    fill.Position = barPos + Vector2.new(0, yOffset)
+                    fill.Size = Vector2.new(barWidth, heightPerSegment)
+                    if (i / numSegments) <= healthPercent then
+                        if options.HealthbarGradient then
+                            local t = tick() * options.GradientSpeed
+                            local offset = t % 1
+                            local frac = ((i-1) / numSegments + offset) % 1
+                            local numColors = #options.GradientColors
+                            local colorIndex = math.floor(frac * numColors) + 1
+                            local nextIndex = colorIndex % numColors + 1
+                            local lerpFrac = (frac * numColors) % 1
+                            local color = options.GradientColors[colorIndex]:Lerp(options.GradientColors[nextIndex], lerpFrac)
+                            fill.Color = color
+                        else
+                            fill.Color = options.Color or Color3.new(1,1,1)
+                        end
+                        fill.Visible = isVisible
+                    else
+                        fill.Visible = false
+                    end
                 end
-                data.Drawings.HealthFill.Visible = isVisible
             end
         else
             if data.Drawings.HealthBackground then data.Drawings.HealthBackground.Visible = false end
-            if data.Drawings.HealthFill then data.Drawings.HealthFill.Visible = false end
+            if data.Drawings.HealthFillSegments then
+                for _, fill in pairs(data.Drawings.HealthFillSegments) do
+                    fill.Visible = false
+                end
+            end
         end
     end
 end
