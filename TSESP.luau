@@ -77,6 +77,7 @@ local DefaultConfig = {
 				Color3.fromRGB(255, 0, 170),
 			},
 			Speed = 0.75, -- cycles per second
+			Slices = 8,
 		},
 	},
 	
@@ -126,47 +127,81 @@ end
 function Utilities:GetBoundingBox(character)
 	if not character then return nil end
 
-	local cf, size = character:GetBoundingBox()
-	if not cf or not size then
-		return nil
+	-- Collect baseparts but ignore very large parts (common with accessories)
+	local parts = {}
+	for _, obj in ipairs(character:GetDescendants()) do
+		if obj:IsA("BasePart") and obj.Size then
+			if obj.Transparency < 0.95 then
+				local maxDim = math.max(obj.Size.X, obj.Size.Y, obj.Size.Z)
+				if maxDim <= 6 then
+					table.insert(parts, obj)
+				end
+			end
+		end
 	end
 
-	local half = size * 0.5
-	local corners = {
-		Vector3.new(half.X, half.Y, half.Z),
-		Vector3.new(half.X, half.Y, -half.Z),
-		Vector3.new(half.X, -half.Y, half.Z),
-		Vector3.new(half.X, -half.Y, -half.Z),
-		Vector3.new(-half.X, half.Y, half.Z),
-		Vector3.new(-half.X, half.Y, -half.Z),
-		Vector3.new(-half.X, -half.Y, half.Z),
-		Vector3.new(-half.X, -half.Y, -half.Z),
-	}
+	if #parts == 0 then
+		-- fallback to root-based estimate
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return nil end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local height = (humanoid and humanoid.RigType == Enum.HumanoidRigType.R15) and 2.5 or 2.8
+		local width = 1.5
+
+		local cf = root.CFrame
+		local topLeft = cf * CFrame.new(-width, height, 0)
+		local topRight = cf * CFrame.new(width, height, 0)
+		local bottomLeft = cf * CFrame.new(-width, -height, 0)
+		local bottomRight = cf * CFrame.new(width, -height, 0)
+
+		local tl, tlVis = self:GetScreenPosition(topLeft.Position)
+		local tr, trVis = self:GetScreenPosition(topRight.Position)
+		local bl, blVis = self:GetScreenPosition(bottomLeft.Position)
+		local br, brVis = self:GetScreenPosition(bottomRight.Position)
+
+		if not (tlVis or trVis or blVis or brVis) then
+			return nil
+		end
+
+		local minX = math.min(tl.X, tr.X, bl.X, br.X)
+		local maxX = math.max(tl.X, tr.X, bl.X, br.X)
+		local minY = math.min(tl.Y, tr.Y, bl.Y, br.Y)
+		local maxY = math.max(tl.Y, tr.Y, bl.Y, br.Y)
+
+		return { Position = Vector2.new(minX, minY), Size = Vector2.new(maxX - minX, maxY - minY) }
+	end
 
 	local minX, minY = math.huge, math.huge
 	local maxX, maxY = -math.huge, -math.huge
 	local anyVisible = false
 
-	for _, corner in ipairs(corners) do
-		local worldPos = cf:PointToWorldSpace(corner)
-		local screenPos, onScreen = self:GetScreenPosition(worldPos)
-		if onScreen then
-			anyVisible = true
+	for _, part in ipairs(parts) do
+		local half = part.Size * 0.5
+		local corners = {
+			Vector3.new(half.X, half.Y, half.Z),
+			Vector3.new(half.X, half.Y, -half.Z),
+			Vector3.new(half.X, -half.Y, half.Z),
+			Vector3.new(half.X, -half.Y, -half.Z),
+			Vector3.new(-half.X, half.Y, half.Z),
+			Vector3.new(-half.X, half.Y, -half.Z),
+			Vector3.new(-half.X, -half.Y, half.Z),
+			Vector3.new(-half.X, -half.Y, -half.Z),
+		}
+
+		for _, corner in ipairs(corners) do
+			local worldPos = part.CFrame:PointToWorldSpace(corner)
+			local screenPos, onScreen = self:GetScreenPosition(worldPos)
+			if onScreen then anyVisible = true end
+			minX = math.min(minX, screenPos.X)
+			maxX = math.max(maxX, screenPos.X)
+			minY = math.min(minY, screenPos.Y)
+			maxY = math.max(maxY, screenPos.Y)
 		end
-		minX = math.min(minX, screenPos.X)
-		maxX = math.max(maxX, screenPos.X)
-		minY = math.min(minY, screenPos.Y)
-		maxY = math.max(maxY, screenPos.Y)
 	end
 
-	if not anyVisible then
-		return nil
-	end
+	if not anyVisible then return nil end
 
-	return {
-		Position = Vector2.new(minX, minY),
-		Size = Vector2.new(maxX - minX, maxY - minY),
-	}
+	return { Position = Vector2.new(minX, minY), Size = Vector2.new(maxX - minX, maxY - minY) }
 end
 
 function Utilities:GetPartBoundingBox(part)
@@ -227,12 +262,30 @@ function Utilities:GetCycleColor(gradientConfig)
 	end
 
 	local speed = gradientConfig.Speed or 1
+	-- returns single cycling color (kept for backwards compatibility)
 	local s = (tick() * speed) % #colors
 	local base = math.floor(s) + 1
 	local next = base % #colors + 1
 	local alpha = s - math.floor(s)
 
 	return Utilities:LerpColor(colors[base], colors[next], alpha)
+end
+
+function Utilities:GetGradientColor(gradientConfig, t)
+	-- t is 0..1 position along gradient (0 = top/left, 1 = bottom/right)
+	local colors = gradientConfig and gradientConfig.Colors
+	if not colors or #colors == 0 then return Color3.new(1,1,1) end
+
+	-- normalize t
+	t = math.clamp(t, 0, 1)
+	local total = #colors - 1
+	if total <= 0 then return colors[1] end
+
+	local scaled = t * total
+	local idx = math.floor(scaled) + 1
+	local nxt = math.min(idx + 1, #colors)
+	local alpha = scaled - math.floor(scaled)
+	return Utilities:LerpColor(colors[idx], colors[nxt], alpha)
 end
 
 -- Drawing Object Manager
@@ -282,6 +335,13 @@ function ESPInstance:CreateDrawings()
 	-- Health Bar
 	self.Drawings.HealthBarOutline = DrawingCache:Create("Square")
 	self.Drawings.HealthBar = DrawingCache:Create("Square")
+
+	-- create gradient slices for health bar if configured
+	self.HealthBarSlices = {}
+	local gradientSlices = (self.Config and self.Config.HealthBar and self.Config.HealthBar.Gradient and self.Config.HealthBar.Gradient.Slices) or DefaultConfig.HealthBar.Gradient.Slices
+	for i = 1, gradientSlices do
+		self.HealthBarSlices[i] = DrawingCache:Create("Square")
+	end
 	
 	-- Chams (Highlight)
 	if self.Config.Chams.Enabled then
@@ -513,7 +573,13 @@ function ESPInstance:UpdateName(player, boundingBox, distance, humanoid)
 	self.Drawings.Name.Text = displayText
 	self.Drawings.Name.Color = config.Color
 	self.Drawings.Name.Size = config.Size
-	self.Drawings.Name.Font = config.Font
+	-- safe font assignment with fallback
+	local ok, f = pcall(function() return config.Font end)
+	if ok and f then
+		pcall(function() self.Drawings.Name.Font = f end)
+	else
+		self.Drawings.Name.Font = Drawing.Fonts.Monospace
+	end
 	self.Drawings.Name.Outline = config.Outline
 	self.Drawings.Name.OutlineColor = config.OutlineColor
 	self.Drawings.Name.Center = true
@@ -564,30 +630,93 @@ function ESPInstance:UpdateHealthBar(boundingBox, humanoid)
 	
 	-- Health Bar
 	local healthColor = config.Color
-	local gradientColor = config.Gradient.Enabled and Utilities:GetCycleColor(config.Gradient)
-	if gradientColor then
-		healthColor = gradientColor
-	elseif config.LerpColor then
-		healthColor = Utilities:LerpColor(config.LowHealthColor, config.Color, healthPercent)
-	elseif healthPercent < 0.3 then
-		healthColor = config.LowHealthColor
+
+	local gradientEnabled = config.Gradient and config.Gradient.Enabled
+	local healthColorComputed
+	if not gradientEnabled then
+		if config.LerpColor then
+			healthColorComputed = Utilities:LerpColor(config.LowHealthColor, config.Color, healthPercent)
+		elseif healthPercent < 0.3 then
+			healthColorComputed = config.LowHealthColor
+		else
+			healthColorComputed = config.Color
+		end
 	end
-	
-	local healthBarSize
-	if config.Position == "Left" or config.Position == "Right" then
-		healthBarSize = Vector2.new(barWidth, barHeight * healthPercent)
-		barPos = Vector2.new(barPos.X, barPos.Y + barHeight * (1 - healthPercent))
+
+	-- Render gradient using slices if enabled, otherwise use single bar
+	if gradientEnabled and self.HealthBarSlices then
+		self.Drawings.HealthBar.Visible = false
+		local slices = (config.Gradient and config.Gradient.Slices) or DefaultConfig.HealthBar.Gradient.Slices
+		local speed = (config.Gradient and config.Gradient.Speed) or DefaultConfig.HealthBar.Gradient.Speed
+		local filledHeight = barHeight * healthPercent
+
+		for i = 1, slices do
+			local slice = self.HealthBarSlices[i]
+			if not slice then break end
+			if config.Position == "Left" or config.Position == "Right" then
+				local sliceHeight = barHeight / slices
+				local topY = barPos.Y + (i - 1) * sliceHeight
+				local available = math.clamp(filledHeight - (barHeight - i * sliceHeight), 0, sliceHeight)
+				if available <= 0 then
+					slice.Visible = false
+				else
+					slice.Visible = true
+					local posY = topY + (sliceHeight - available)
+					slice.Position = Vector2.new(barPos.X, posY)
+					slice.Size = Vector2.new(barWidth, available)
+					local progress = (i - 1) / math.max(1, slices - 1)
+					local offset = (tick() * speed) % 1
+					local samplePos = (progress + offset) % 1
+					slice.Color = Utilities:GetGradientColor(config.Gradient, samplePos)
+					slice.Filled = true
+					slice.Transparency = 1
+					slice.ZIndex = 2
+				end
+			else
+				-- horizontal (Top/Bottom)
+				local sliceWidth = barWidth / slices
+				local leftX = barPos.X + (i - 1) * sliceWidth
+				local available = math.clamp(barWidth * healthPercent - (i - 1) * sliceWidth, 0, sliceWidth)
+				if available <= 0 then
+					slice.Visible = false
+				else
+					slice.Visible = true
+					slice.Position = Vector2.new(leftX, barPos.Y)
+					slice.Size = Vector2.new(available, barHeight)
+					local progress = (i - 1) / math.max(1, slices - 1)
+					local offset = (tick() * speed) % 1
+					local samplePos = (progress + offset) % 1
+					slice.Color = Utilities:GetGradientColor(config.Gradient, samplePos)
+					slice.Filled = true
+					slice.Transparency = 1
+					slice.ZIndex = 2
+				end
+			end
+		end
 	else
-		healthBarSize = Vector2.new(barWidth * healthPercent, barHeight)
+		-- hide any slices
+		if self.HealthBarSlices then
+			for _, slice in pairs(self.HealthBarSlices) do
+				slice.Visible = false
+			end
+		end
+		-- legacy single bar
+		local healthBarSize
+		if config.Position == "Left" or config.Position == "Right" then
+			healthBarSize = Vector2.new(barWidth, barHeight * healthPercent)
+			barPos = Vector2.new(barPos.X, barPos.Y + barHeight * (1 - healthPercent))
+		else
+			healthBarSize = Vector2.new(barWidth * healthPercent, barHeight)
+		end
+
+		self.Drawings.HealthBar.Visible = true
+		self.Drawings.HealthBar.Position = barPos
+		self.Drawings.HealthBar.Size = healthBarSize
+		self.Drawings.HealthBar.Color = healthColorComputed or healthColor
+		self.Drawings.HealthBar.Filled = true
+		self.Drawings.HealthBar.Transparency = 1
+		self.Drawings.HealthBar.ZIndex = 2
 	end
-	
-	self.Drawings.HealthBar.Visible = true
-	self.Drawings.HealthBar.Position = barPos
-	self.Drawings.HealthBar.Size = healthBarSize
-	self.Drawings.HealthBar.Color = healthColor
-	self.Drawings.HealthBar.Filled = true
-	self.Drawings.HealthBar.Transparency = 1
-	self.Drawings.HealthBar.ZIndex = 2
 end
 
 function ESPInstance:SetVisible(visible)
@@ -605,6 +734,13 @@ end
 function ESPInstance:Remove()
 	for _, drawing in pairs(self.Drawings) do
 		DrawingCache:Remove(drawing)
+	end
+
+	if self.HealthBarSlices then
+		for _, d in pairs(self.HealthBarSlices) do
+			DrawingCache:Remove(d)
+		end
+		self.HealthBarSlices = nil
 	end
 	
 	if self.Highlight then
@@ -826,7 +962,12 @@ function PartESPInstance:UpdateName(boundingBox, distance)
 	self.Drawings.Name.Text = displayText
 	self.Drawings.Name.Color = config.Color
 	self.Drawings.Name.Size = config.Size
-	self.Drawings.Name.Font = config.Font
+	local ok, f = pcall(function() return config.Font end)
+	if ok and f then
+		pcall(function() self.Drawings.Name.Font = f end)
+	else
+		self.Drawings.Name.Font = Drawing.Fonts.Monospace
+	end
 	self.Drawings.Name.Outline = config.Outline
 	self.Drawings.Name.OutlineColor = config.OutlineColor
 	self.Drawings.Name.Center = true
