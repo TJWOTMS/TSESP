@@ -108,6 +108,14 @@ function ESP:Add(target: Instance, options: table?)
     local color = options.Color or Color3.new(1, 1, 1)
     local showBox = options.ShowBox
     local boxType = options.BoxType or "Full"
+    local boxThickness = options.BoxThickness or 1
+    local cornerThickness = options.CornerThickness or 2
+    local cornerOutlineThickness = options.CornerOutlineThickness or 4
+    local nameOffsetY = options.NameOffsetY or -20
+    local bottomOffsetY = options.BottomOffsetY or 15
+    local healthTextOffsetX = options.HealthTextOffsetX or -50
+    local healthTextOffsetY = options.HealthTextOffsetY or 0
+    local healthbarWidth = options.HealthbarWidth or 6
     local showText = options.ShowText
     local showName = options.ShowName
     local showHealth = options.ShowHealth
@@ -123,6 +131,7 @@ function ESP:Add(target: Instance, options: table?)
     local gradientColors = options.GradientColors or {Color3.new(1,0,0), Color3.new(0,1,0)}
     local gradientSpeed = options.GradientSpeed or 1
     local font = options.Font or "Gotham"
+    local textSize = options.TextSize or 14
 
     local espData = {
         Target = target,
@@ -136,28 +145,29 @@ function ESP:Add(target: Instance, options: table?)
         if boxType == "Full" then
             local box = Drawing.new("Square")
             box.Color = color
-            box.Thickness = 1
+            box.Thickness = boxThickness
             box.Filled = false
             box.Visible = isVisible
             espData.Drawings.Box = box
         elseif boxType == "Corner" then
+            local outlineLines = {}
+            for i = 1, 8 do
+                local ol = Drawing.new("Line")
+                ol.Color = Color3.new(0,0,0)
+                ol.Thickness = cornerOutlineThickness
+                ol.Visible = isVisible
+                table.insert(outlineLines, ol)
+            end
             local lines = {}
             for i = 1, 8 do
                 local line = Drawing.new("Line")
                 line.Color = color
-                line.Thickness = 2  -- Thicker outline
+                line.Thickness = cornerThickness
                 line.Visible = isVisible
                 table.insert(lines, line)
             end
+            espData.Drawings.CornerOutlines = outlineLines
             espData.Drawings.CornerLines = lines
-        elseif boxType == "Radius" then
-            local circle = Drawing.new("Circle")
-            circle.Color = color
-            circle.Thickness = 3  -- Thicker outline
-            circle.Filled = false
-            circle.NumSides = 32
-            circle.Visible = isVisible
-            espData.Drawings.Circle = circle
         end
     end
 
@@ -185,7 +195,7 @@ function ESP:Add(target: Instance, options: table?)
         if showName then
             local nameTxt = Drawing.new("Text")
             nameTxt.Color = color
-            nameTxt.Size = 14
+            nameTxt.Size = textSize
             nameTxt.Center = true
             nameTxt.Outline = true
             nameTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
@@ -195,7 +205,7 @@ function ESP:Add(target: Instance, options: table?)
         if showHealth then
             local healthTxt = Drawing.new("Text")
             healthTxt.Color = color
-            healthTxt.Size = 14
+            healthTxt.Size = textSize
             healthTxt.Center = false  -- Left align for next to healthbar
             healthTxt.Outline = true
             healthTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
@@ -205,7 +215,7 @@ function ESP:Add(target: Instance, options: table?)
         if showDistance then
             local bottomTxt = Drawing.new("Text")
             bottomTxt.Color = color
-            bottomTxt.Size = 14
+            bottomTxt.Size = textSize
             bottomTxt.Center = true
             bottomTxt.Outline = true
             bottomTxt.Font = (font == "Auto" and 2) or (font == "Gotham" and 4) or font
@@ -288,6 +298,15 @@ function ESP:UpdateESP(data)
     local dist = getDistance(pivot.Position)
     local options = data.Options
 
+    -- Rainbow support: compute a currentColor to use for all components when enabled
+    local rainbowEnabled = options.Rainbow
+    local rainbowSpeed = options.RainbowSpeed or 1
+    local currentColor = options.Color or Color3.new(1,1,1)
+    if rainbowEnabled then
+        local h = (tick() * rainbowSpeed) % 1
+        currentColor = Color3.fromHSV(h, 1, 1)
+    end
+
     if options.MaxDistance and dist > options.MaxDistance then
         -- hide all
         for _, drawing in pairs(data.Drawings) do
@@ -311,6 +330,14 @@ function ESP:UpdateESP(data)
     -- Update chams
     if data.Highlight then
         data.Highlight.Enabled = isVisible
+        -- set chams colors when available (respect rainbow)
+        if options.Rainbow then
+            data.Highlight.FillColor = currentColor
+            data.Highlight.OutlineColor = currentColor
+        else
+            data.Highlight.FillColor = options.ChamsColor or options.Color or data.Highlight.FillColor
+            data.Highlight.OutlineColor = options.ChamsColor or options.Color or data.Highlight.OutlineColor
+        end
     end
 
     -- Update offscreen arrow
@@ -357,7 +384,7 @@ function ESP:UpdateESP(data)
         -- hide box, 3dbox, tracer, text, healthbar
         if data.Drawings.Box then data.Drawings.Box.Visible = false end
         if data.Drawings.CornerLines then for _, l in pairs(data.Drawings.CornerLines) do l.Visible = false end end
-        if data.Drawings.Circle then data.Drawings.Circle.Visible = false end
+        
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
         if data.Drawings.Texts then for _, txt in pairs(data.Drawings.Texts) do txt.Visible = false end end
         if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
@@ -369,15 +396,47 @@ function ESP:UpdateESP(data)
     if data.Drawings.Box then
         data.Drawings.Box.Position = bbox.Position - bbox.Size / 2
         data.Drawings.Box.Size = bbox.Size
-        data.Drawings.Box.Thickness = 4  -- Thicker outline
+        -- use fixed thickness option to avoid perceived scaling at distance
+        data.Drawings.Box.Thickness = options.BoxThickness or 1
+        data.Drawings.Box.Color = currentColor
         data.Drawings.Box.Visible = isVisible
     end
 
     if data.Drawings.CornerLines then
         local lines = data.Drawings.CornerLines
+        -- support outlines for corner boxes (draw outlines behind colored lines)
+        local outlineLines = data.Drawings.CornerOutlines
+        if outlineLines then
+            local pos = bbox.Position - bbox.Size / 2
+            local size = bbox.Size
+            local cornerSize = math.min(size.X, size.Y) / 4
+            local outlineThickness = options.CornerOutlineThickness or 4
+            -- top left
+            outlineLines[1].From = pos
+            outlineLines[1].To = pos + Vector2.new(cornerSize, 0)
+            outlineLines[2].From = pos
+            outlineLines[2].To = pos + Vector2.new(0, cornerSize)
+            -- top right
+            outlineLines[3].From = pos + Vector2.new(size.X, 0)
+            outlineLines[3].To = pos + Vector2.new(size.X - cornerSize, 0)
+            outlineLines[4].From = pos + Vector2.new(size.X, 0)
+            outlineLines[4].To = pos + Vector2.new(size.X, cornerSize)
+            -- bottom left
+            outlineLines[5].From = pos + Vector2.new(0, size.Y)
+            outlineLines[5].To = pos + Vector2.new(cornerSize, size.Y)
+            outlineLines[6].From = pos + Vector2.new(0, size.Y)
+            outlineLines[6].To = pos + Vector2.new(0, size.Y - cornerSize)
+            -- bottom right
+            outlineLines[7].From = pos + size
+            outlineLines[7].To = pos + size - Vector2.new(cornerSize, 0)
+            outlineLines[8].From = pos + size
+            outlineLines[8].To = pos + size - Vector2.new(0, cornerSize)
+            for _, l in pairs(outlineLines) do l.Thickness = options.CornerOutlineThickness or 4; l.Color = currentColor; l.Visible = isVisible end
+        end
         local pos = bbox.Position - bbox.Size / 2
         local size = bbox.Size
         local cornerSize = math.min(size.X, size.Y) / 4
+        local mainThickness = options.CornerThickness or 2
         -- top left
         lines[1].From = pos
         lines[1].To = pos + Vector2.new(cornerSize, 0)
@@ -398,13 +457,7 @@ function ESP:UpdateESP(data)
         lines[7].To = pos + size - Vector2.new(cornerSize, 0)
         lines[8].From = pos + size
         lines[8].To = pos + size - Vector2.new(0, cornerSize)
-        for _, l in pairs(lines) do l.Visible = isVisible end
-    end
-
-    if data.Drawings.Circle then
-        data.Drawings.Circle.Position = bbox.Position
-        data.Drawings.Circle.Radius = math.max(bbox.Size.X, bbox.Size.Y) / 2
-        data.Drawings.Circle.Visible = isVisible
+        for _, l in pairs(lines) do l.Thickness = mainThickness; l.Color = currentColor; l.Visible = isVisible end
     end
 
     -- Update tracer
@@ -422,11 +475,28 @@ function ESP:UpdateESP(data)
         end
         data.Drawings.Tracer.From = fromPos
         data.Drawings.Tracer.To = bbox.Position
+        data.Drawings.Tracer.Color = currentColor
         data.Drawings.Tracer.Visible = isVisible
     end
 
     -- Update texts
     if data.Drawings.Texts then
+        local enforcedSize = options.TextSize or 14
+        if data.Drawings.Texts.name then
+            data.Drawings.Texts.name.Size = enforcedSize
+            data.Drawings.Texts.name.Color = currentColor
+            data.Drawings.Texts.name.Position = bbox.Position + Vector2.new(0, options.NameOffsetY or -20)
+        end
+        if data.Drawings.Texts.health then
+            data.Drawings.Texts.health.Size = enforcedSize
+            data.Drawings.Texts.health.Color = currentColor
+            data.Drawings.Texts.health.Position = bbox.Position + Vector2.new(options.HealthTextOffsetX or -50, options.HealthTextOffsetY or 0)
+        end
+        if data.Drawings.Texts.bottom then
+            data.Drawings.Texts.bottom.Size = enforcedSize
+            data.Drawings.Texts.bottom.Color = currentColor
+            data.Drawings.Texts.bottom.Position = bbox.Position + Vector2.new(0, options.BottomOffsetY or 15)
+        end
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         local player = game.Players:GetPlayerFromCharacter(model)
         local backpackCount = 0
@@ -461,7 +531,7 @@ function ESP:UpdateESP(data)
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
-            local barWidth = math.max(1, bbox.Size.Y * 0.015)  -- Thinner healthbar
+            local barWidth = options.HealthbarWidth or 6
             local baseBarHeight = bbox.Size.Y
             local barHeight = options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 2, 0)
@@ -471,6 +541,7 @@ function ESP:UpdateESP(data)
             if data.Drawings.HealthbarOutline then
                 data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(0, 0.5)
                 data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth, barHeight + 1)
+                data.Drawings.HealthbarOutline.Color = currentColor
                 data.Drawings.HealthbarOutline.Visible = isVisible
             end
             if data.Drawings.HealthFillSegments then
@@ -481,9 +552,12 @@ function ESP:UpdateESP(data)
                     local fill = segments[i]
                     local yOffset = (i-1) * heightPerSegment
                     fill.Position = barPos + Vector2.new(0, yOffset)
-                    fill.Size = Vector2.new(barWidth, heightPerSegment + 0.5)  -- Smaller overlap for 500 segments
-                    if (i / numSegments) <= 1 then  -- Always show segments up to bar height
-                        if options.HealthbarGradient then
+                    fill.Size = Vector2.new(barWidth, heightPerSegment)  -- No overlap for 1000 segments
+                    if (i / numSegments) <= healthPercent then  -- Show segments up to health
+                        if options.Rainbow then
+                            local hue = (tick() * options.RainbowSpeed + (i / numSegments)) % 1
+                            fill.Color = Color3.fromHSV(hue, 1, 1)
+                        elseif options.HealthbarGradient then
                             local t = tick() * options.GradientSpeed
                             local offset = t % 1
                             local frac = ((i-1) / numSegments + offset) % 1
