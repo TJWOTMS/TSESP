@@ -391,8 +391,9 @@ function ESP:UpdateESP(data)
     if not bbox then
         -- hide box, 3dbox, tracer, text, healthbar
         if data.Drawings.Box then data.Drawings.Box.Visible = false end
+        if data.Drawings.BoxOutline then data.Drawings.BoxOutline.Visible = false end
         if data.Drawings.CornerLines then for _, l in pairs(data.Drawings.CornerLines) do l.Visible = false end end
-        
+        if data.Drawings.CornerOutlines then for _, l in pairs(data.Drawings.CornerOutlines) do l.Visible = false end end
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
         if data.Drawings.Texts then for _, txt in pairs(data.Drawings.Texts) do txt.Visible = false end end
         if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
@@ -537,9 +538,9 @@ function ESP:UpdateESP(data)
 
     -- Update texts
     if data.Drawings.Texts then
-        local enforcedSize = options.TextSize or 14
+        local baseTextSize = options.TextSize or 14
+        local textSizeScaled = math.clamp(baseTextSize * scale, 8, 40)
         if data.Drawings.Texts.name then
-            local textSizeScaled = math.clamp((options.TextSize or 14) * scale, 8, 40)
             data.Drawings.Texts.name.Size = textSizeScaled
             data.Drawings.Texts.name.Color = currentColor
             -- anchor name to head (preferred) or to bbox top as fallback, then clamp to viewport
@@ -547,9 +548,9 @@ function ESP:UpdateESP(data)
             local namePos
             if head and camera then
                 local hp, onS = camera:WorldToViewportPoint(head.Position + Vector3.new(0, (head.Size and head.Size.Y or 1) / 2 + 0.2, 0))
-                namePos = Vector2.new(hp.X, hp.Y - (textSizeScaled + 12))
+                namePos = Vector2.new(hp.X, hp.Y - (textSizeScaled + 12 * scale))
             else
-                namePos = bbox.Position + Vector2.new(0, -bbox.Size.Y/2 - (textSizeScaled + 12))
+                namePos = bbox.Position + Vector2.new(0, -bbox.Size.Y/2 - (textSizeScaled + 12 * scale))
             end
             -- clamp to viewport with small margin
             local vp = camera.ViewportSize
@@ -558,18 +559,16 @@ function ESP:UpdateESP(data)
             data.Drawings.Texts.name.Position = namePos
         end
         if data.Drawings.Texts.health then
-            local textSizeScaled = math.clamp((options.TextSize or 14) * scale, 8, 40)
             data.Drawings.Texts.health.Size = textSizeScaled
             data.Drawings.Texts.health.Color = currentColor
             -- position health text next to the healthbar (barPos is calculated below)
             -- we'll set it after healthbar computation to ensure correct anchoring
         end
         if data.Drawings.Texts.bottom then
-            local textSizeScaled = math.clamp((options.TextSize or 14) * scale, 8, 40)
             data.Drawings.Texts.bottom.Size = textSizeScaled
             data.Drawings.Texts.bottom.Color = currentColor
             -- anchor bottom text to HumanoidRootPart if available, fallback to bbox bottom, then clamp
-            local bottomPos = bbox.Position + Vector2.new(0, bbox.Size.Y/2 + (textSizeScaled/2 + 8))
+            local bottomPos = bbox.Position + Vector2.new(0, bbox.Size.Y/2 + (textSizeScaled/2 + 8 * scale))
             local vp = camera.ViewportSize
             bottomPos = Vector2.new(math.clamp(bottomPos.X, 0, vp.X), math.clamp(bottomPos.Y, 0, vp.Y))
             data.Drawings.Texts.bottom.Position = bottomPos
@@ -604,14 +603,15 @@ function ESP:UpdateESP(data)
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
-            local barWidth = math.max(4, (options.HealthbarWidth or 6))
+            local baseBarWidth = options.HealthbarWidth or 6
+            local barWidth = math.max(4, baseBarWidth * scale)
             local baseBarHeight = bbox.Size.Y
-            local barHeight = options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight
+            local barHeight = (options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight) * scale
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 4, 0)
             if options.ShrinkHealthbar then
-                barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
+                barPos = barPos + Vector2.new(0, baseBarHeight * scale - barHeight)  -- Adjust position for shrinking from top
             end
-            local outlineTh = options.HealthbarOutlineThickness or 1
+            local outlineTh = math.clamp((options.HealthbarOutlineThickness or 1) * scale, 1, options.MaxHealthbarOutlineThickness or 6)
             local inset = math.max(2, outlineTh + 1)  -- Ensure fills don't touch outline
             if data.Drawings.HealthFillSegments then
                 local segments = data.Drawings.HealthFillSegments
@@ -624,7 +624,7 @@ function ESP:UpdateESP(data)
                     local fillWidth = math.max(1, barWidth - inset * 2)
                     -- compute fractional visibility for partial segment handling
                     -- align fills to bottom so gradient grows from bottom up and doesn't overflow outline
-                    local filledAmount = healthPercent * barHeight
+                    local filledAmount = barHeight * healthPercent
                     local segmentTop = (i-1) * heightPerSegment
                     local segmentBottom = i * heightPerSegment
                     local visibleTop = math.max(segmentTop, barHeight - filledAmount)
@@ -655,9 +655,9 @@ function ESP:UpdateESP(data)
                 end
             end
             if data.Drawings.HealthbarOutline then
-                -- keep outline thin and fixed so gradient/fill doesn't overflow it
-                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(outlineTh, outlineTh)
-                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2*outlineTh, barHeight + 2*outlineTh)
+                -- outline same size as bar
+                data.Drawings.HealthbarOutline.Position = barPos
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth, barHeight)
                 data.Drawings.HealthbarOutline.Color = Color3.new(0,0,0)
                 data.Drawings.HealthbarOutline.Thickness = outlineTh
                 data.Drawings.HealthbarOutline.Visible = isVisible
@@ -666,7 +666,7 @@ function ESP:UpdateESP(data)
             if data.Drawings.Texts and data.Drawings.Texts.health then
                 local ht = data.Drawings.Texts.health
                 -- place health text to left of the bar, vertically centered on the bbox (not the bar)
-                local desired = Vector2.new(barPos.X - (barWidth/2 + 6), bbox.Position.Y)
+                local desired = Vector2.new(barPos.X - (barWidth/2 + 6 * scale), bbox.Position.Y)
                 local vp = camera.ViewportSize
                 desired = Vector2.new(math.clamp(desired.X, 0, vp.X), math.clamp(desired.Y, 0, vp.Y))
                 ht.Position = desired
