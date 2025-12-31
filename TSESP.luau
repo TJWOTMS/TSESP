@@ -908,7 +908,6 @@ function PartESPInstance:CreateHighlight()
 		self.Highlight = nil
 	end
 end
-end
 
 function PartESPInstance:UpdateHighlight()
 	if self.Config.Chams.Enabled then
