@@ -235,7 +235,7 @@ function ESP:Add(target: Instance, options: table?)
 
     if showHealthbar then
         local segments = {}
-        local numSegments = options.HealthbarSegments or 40  -- fewer segments for stability and no overflow
+        local numSegments = options.HealthbarSegments or 200  -- more segments for smooth gradient (default 200)
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -417,31 +417,24 @@ function ESP:UpdateESP(data)
 
     -- ensure full-box outline exists when using full boxes (handles runtime BoxType changes)
     if options.ShowBox and options.BoxType == "Full" then
-        -- ensure outline exists; recreate box afterwards to ensure correct draw order
+        local createdOutlineNow = false
         if not data.Drawings.BoxOutline then
             local boxOutline = Drawing.new("Square")
             boxOutline.Color = Color3.new(0,0,0)
-            boxOutline.Thickness = options.BoxOutlineThickness or 2
+            boxOutline.Thickness = options.BoxOutlineThickness or 1
             boxOutline.Filled = false
             boxOutline.Visible = isVisible
             data.Drawings.BoxOutline = boxOutline
+            createdOutlineNow = true
         end
-        -- ensure box exists and is on top of the outline
-        if not data.Drawings.Box then
-            local newBox = Drawing.new("Square")
-            newBox.Color = options.Color or Color3.new(1,1,1)
-            newBox.Thickness = options.BoxThickness or 1
-            newBox.Filled = false
-            newBox.Visible = isVisible
-            data.Drawings.Box = newBox
-        else
-            -- recreate box to ensure creation order places it after the outline
+        -- only recreate or create the box if the outline was just created or box is missing
+        if createdOutlineNow or not data.Drawings.Box then
             local old = data.Drawings.Box
-            local c = old.Color
-            local t = old.Thickness
-            local f = old.Filled
-            local vis = old.Visible
-            old:Remove()
+            local c = (old and old.Color) or (options.Color or Color3.new(1,1,1))
+            local t = (old and old.Thickness) or (options.BoxThickness or 1)
+            local f = (old and old.Filled) or false
+            local vis = (old and old.Visible) or isVisible
+            if old then old:Remove() end
             local newBox = Drawing.new("Square")
             newBox.Color = c
             newBox.Thickness = t
@@ -454,7 +447,7 @@ function ESP:UpdateESP(data)
     -- Update box outline (full box outline should be behind main box)
     if data.Drawings.BoxOutline then
         local outline = data.Drawings.BoxOutline
-        local outlineTh = options.BoxOutlineThickness or 2
+        local outlineTh = options.BoxOutlineThickness or 1
         -- make outline slightly larger than box so it frames it
         local outlineSize = bbox.Size + Vector2.new(outlineTh * 2, outlineTh * 2)
         outline.Size = outlineSize
@@ -554,13 +547,14 @@ function ESP:UpdateESP(data)
             local namePos
             if head and camera then
                 local hp, onS = camera:WorldToViewportPoint(head.Position + Vector3.new(0, (head.Size and head.Size.Y or 1) / 2 + 0.2, 0))
-                namePos = Vector2.new(hp.X, hp.Y - (textSizeScaled + 6))
+                namePos = Vector2.new(hp.X, hp.Y - (textSizeScaled + 12))
             else
-                namePos = bbox.Position + Vector2.new(0, -bbox.Size.Y/2 - (textSizeScaled + 6))
+                namePos = bbox.Position + Vector2.new(0, -bbox.Size.Y/2 - (textSizeScaled + 12))
             end
-            -- clamp to viewport
+            -- clamp to viewport with small margin
             local vp = camera.ViewportSize
-            namePos = Vector2.new(math.clamp(namePos.X, 0, vp.X), math.clamp(namePos.Y, 0, vp.Y))
+            local margin = 8
+            namePos = Vector2.new(math.clamp(namePos.X, margin, vp.X - margin), math.clamp(namePos.Y, margin, vp.Y - margin))
             data.Drawings.Texts.name.Position = namePos
         end
         if data.Drawings.Texts.health then
@@ -575,14 +569,7 @@ function ESP:UpdateESP(data)
             data.Drawings.Texts.bottom.Size = textSizeScaled
             data.Drawings.Texts.bottom.Color = currentColor
             -- anchor bottom text to HumanoidRootPart if available, fallback to bbox bottom, then clamp
-            local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-            local bottomPos
-            if root and camera then
-                local rp, onS = camera:WorldToViewportPoint(root.Position)
-                bottomPos = Vector2.new(rp.X, rp.Y + (textSizeScaled/2 + 6))
-            else
-                bottomPos = bbox.Position + Vector2.new(0, bbox.Size.Y/2 + (textSizeScaled/2 + 6))
-            end
+            local bottomPos = bbox.Position + Vector2.new(0, bbox.Size.Y/2 + (textSizeScaled/2 + 8))
             local vp = camera.ViewportSize
             bottomPos = Vector2.new(math.clamp(bottomPos.X, 0, vp.X), math.clamp(bottomPos.Y, 0, vp.Y))
             data.Drawings.Texts.bottom.Position = bottomPos
@@ -644,12 +631,15 @@ function ESP:UpdateESP(data)
                     local inset = options.HealthbarInset or 2
                     local fillWidth = math.max(1, barWidth - inset * 2)
                     -- compute fractional visibility for partial segment handling
-                    local frac = math.clamp((healthPercent * numSegments) - (i-1), 0, 1)
-                    if frac > 0 then
-                        local fillHeight = heightPerSegment * frac
-                        -- position (top-left) remains at yOffset; partial segment will be cropped
-                        fill.Position = barPos + Vector2.new(inset, yOffset)
-                        fill.Size = Vector2.new(fillWidth, fillHeight)
+                    -- align fills to bottom so gradient grows from bottom up and doesn't overflow outline
+                    local filledAmount = healthPercent * barHeight
+                    local segmentTop = (i-1) * heightPerSegment
+                    local segmentBottom = i * heightPerSegment
+                    local visibleTop = math.max(segmentTop, barHeight - filledAmount)
+                    local segVisibleHeight = math.max(0, segmentBottom - visibleTop)
+                    if segVisibleHeight > 0 then
+                        fill.Position = barPos + Vector2.new(inset, visibleTop)
+                        fill.Size = Vector2.new(fillWidth, segVisibleHeight)
                         if options.Rainbow then
                             local hue = (tick() * options.RainbowSpeed + (i / numSegments)) % 1
                             fill.Color = Color3.fromHSV(hue, 1, 1)
@@ -675,8 +665,8 @@ function ESP:UpdateESP(data)
             -- set health text next to bar now that barPos/barWidth computed
             if data.Drawings.Texts and data.Drawings.Texts.health then
                 local ht = data.Drawings.Texts.health
-                -- place health text centered vertically on the bar and slightly left, clamp to viewport
-                local desired = barPos + Vector2.new(- (barWidth/2 + 6), barHeight / 2)
+                -- place health text to left of the bar, vertically centered on the bbox (not the bar)
+                local desired = Vector2.new(barPos.X - (barWidth/2 + 6), bbox.Position.Y)
                 local vp = camera.ViewportSize
                 desired = Vector2.new(math.clamp(desired.X, 0, vp.X), math.clamp(desired.Y, 0, vp.Y))
                 ht.Position = desired
