@@ -210,7 +210,7 @@ function ESP:Add(target: Instance, options: table?)
 
     if showHealthbar then
         local segments = {}
-        local numSegments = 100  -- Ultra-smooth gradient
+        local numSegments = 200  -- Ultra-smooth gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -218,6 +218,14 @@ function ESP:Add(target: Instance, options: table?)
             table.insert(segments, fill)
         end
         espData.Drawings.HealthFillSegments = segments
+
+        -- Add outline
+        local outline = Drawing.new("Square")
+        outline.Color = Color3.new(0,0,0)
+        outline.Thickness = 1
+        outline.Filled = false
+        outline.Visible = isVisible
+        espData.Drawings.HealthbarOutline = outline
     end
 
     activeESPs[target] = espData
@@ -330,6 +338,7 @@ function ESP:UpdateESP(data)
         if data.Drawings.Box3DLines then for _, l in pairs(data.Drawings.Box3DLines) do l.Visible = false end end
         if data.Drawings.Tracer then data.Drawings.Tracer.Visible = false end
         if data.Drawings.Text then data.Drawings.Text.Visible = false end
+        if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
         if data.Drawings.HealthFillSegments then for _, d in pairs(data.Drawings.HealthFillSegments) do d.Visible = false end end
         return
     end
@@ -338,6 +347,7 @@ function ESP:UpdateESP(data)
     if data.Drawings.Box then
         data.Drawings.Box.Position = bbox.Position - bbox.Size / 2
         data.Drawings.Box.Size = bbox.Size
+        data.Drawings.Box.Thickness = 2  -- Thicker outline
         data.Drawings.Box.Visible = isVisible
     end
 
@@ -461,49 +471,58 @@ function ESP:UpdateESP(data)
         end
         data.Drawings.Text.Text = textStr
         data.Drawings.Text.Position = bbox.Position + Vector2.new(0, bbox.Size.Y / 2 + 10)
+        data.Drawings.Text.Outline = true  -- Ensure outline
         data.Drawings.Text.Visible = isVisible
     end
 
     -- Update healthbar
-    if data.Drawings.HealthFillSegments then
+    if data.Drawings.HealthFillSegments or data.Drawings.HealthbarOutline then
         local humanoid = model:FindFirstChildOfClass("Humanoid")
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
-            local barWidth = 5
+            local barWidth = math.max(2, bbox.Size.Y * 0.03)  -- Scale with distance, min 2
             local baseBarHeight = bbox.Size.Y
             local barHeight = options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 2, 0)
             if options.ShrinkHealthbar then
                 barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
             end
-            local segments = data.Drawings.HealthFillSegments
-            local numSegments = #segments
-            local heightPerSegment = barHeight / numSegments
-            for i = 1, numSegments do
-                local fill = segments[i]
-                local yOffset = (i-1) * heightPerSegment
-                fill.Position = barPos + Vector2.new(0, yOffset)
-                fill.Size = Vector2.new(barWidth, heightPerSegment + 2)  -- Larger overlap to remove gaps
-                if (i / numSegments) <= 1 then  -- Always show segments up to bar height
-                    if options.HealthbarGradient then
-                        local t = tick() * options.GradientSpeed
-                        local offset = t % 1
-                        local frac = ((i-1) / numSegments + offset) % 1
-                        local numColors = #options.GradientColors
-                        local colorIndex = math.floor(frac * numColors) + 1
-                        local nextIndex = colorIndex % numColors + 1
-                        local lerpFrac = (frac * numColors) % 1
-                        local color = options.GradientColors[colorIndex]:Lerp(options.GradientColors[nextIndex], lerpFrac)
-                        fill.Color = color
+            if data.Drawings.HealthbarOutline then
+                data.Drawings.HealthbarOutline.Position = barPos - Vector2.new(1, 1)
+                data.Drawings.HealthbarOutline.Size = Vector2.new(barWidth + 2, baseBarHeight + 2)
+                data.Drawings.HealthbarOutline.Visible = isVisible
+            end
+            if data.Drawings.HealthFillSegments then
+                local segments = data.Drawings.HealthFillSegments
+                local numSegments = #segments
+                local heightPerSegment = barHeight / numSegments
+                for i = 1, numSegments do
+                    local fill = segments[i]
+                    local yOffset = (i-1) * heightPerSegment
+                    fill.Position = barPos + Vector2.new(0, yOffset)
+                    fill.Size = Vector2.new(barWidth, heightPerSegment + 2)  -- Larger overlap to remove gaps
+                    if (i / numSegments) <= 1 then  -- Always show segments up to bar height
+                        if options.HealthbarGradient then
+                            local t = tick() * options.GradientSpeed
+                            local offset = t % 1
+                            local frac = ((i-1) / numSegments + offset) % 1
+                            local numColors = #options.GradientColors
+                            local colorIndex = math.floor(frac * numColors) + 1
+                            local nextIndex = colorIndex % numColors + 1
+                            local lerpFrac = (frac * numColors) % 1
+                            local color = options.GradientColors[colorIndex]:Lerp(options.GradientColors[nextIndex], lerpFrac)
+                            fill.Color = color
+                        else
+                            fill.Color = options.Color or Color3.new(1,1,1)
+                        end
+                        fill.Visible = isVisible
                     else
-                        fill.Color = options.Color or Color3.new(1,1,1)
+                        fill.Visible = false
                     end
-                    fill.Visible = isVisible
-                else
-                    fill.Visible = false
                 end
             end
         else
+            if data.Drawings.HealthbarOutline then data.Drawings.HealthbarOutline.Visible = false end
             if data.Drawings.HealthFillSegments then
                 for _, fill in pairs(data.Drawings.HealthFillSegments) do
                     fill.Visible = false
