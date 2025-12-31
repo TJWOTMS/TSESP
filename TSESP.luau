@@ -118,6 +118,7 @@ function ESP:Add(target: Instance, options: table?)
     local maxDistance = options.MaxDistance
     local showHealthbar = options.Healthbar
     local healthbarGradient = options.HealthbarGradient
+    local shrinkHealthbar = options.ShrinkHealthbar or false
     local gradientColors = options.GradientColors or {Color3.new(1,0,0), Color3.new(0,1,0)}
     local gradientSpeed = options.GradientSpeed or 1
 
@@ -209,7 +210,7 @@ function ESP:Add(target: Instance, options: table?)
 
     if showHealthbar then
         local segments = {}
-        local numSegments = 50  -- Increased for ultra-smooth gradient
+        local numSegments = 100  -- Ultra-smooth gradient
         for i = 1, numSegments do
             local fill = Drawing.new("Square")
             fill.Filled = true
@@ -469,8 +470,12 @@ function ESP:UpdateESP(data)
         if humanoid then
             local healthPercent = humanoid.Health / humanoid.MaxHealth
             local barWidth = 5
-            local barHeight = bbox.Size.Y
+            local baseBarHeight = bbox.Size.Y
+            local barHeight = options.ShrinkHealthbar and (baseBarHeight * healthPercent) or baseBarHeight
             local barPos = bbox.Position - bbox.Size / 2 - Vector2.new(barWidth + 2, 0)
+            if options.ShrinkHealthbar then
+                barPos = barPos + Vector2.new(0, baseBarHeight - barHeight)  -- Adjust position for shrinking from top
+            end
             local segments = data.Drawings.HealthFillSegments
             local numSegments = #segments
             local heightPerSegment = barHeight / numSegments
@@ -478,8 +483,8 @@ function ESP:UpdateESP(data)
                 local fill = segments[i]
                 local yOffset = (i-1) * heightPerSegment
                 fill.Position = barPos + Vector2.new(0, yOffset)
-                fill.Size = Vector2.new(barWidth, heightPerSegment + 1)  -- Slight overlap to remove lines
-                if (i / numSegments) <= healthPercent then
+                fill.Size = Vector2.new(barWidth, heightPerSegment + 2)  -- Larger overlap to remove gaps
+                if (i / numSegments) <= 1 then  -- Always show segments up to bar height
                     if options.HealthbarGradient then
                         local t = tick() * options.GradientSpeed
                         local offset = t % 1
